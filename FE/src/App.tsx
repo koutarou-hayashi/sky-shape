@@ -91,11 +91,14 @@ export default function App() {
 
   const meta = data.meta;
   const fmt = (n: number) => n.toLocaleString("ja-JP");
-  const note = !meta
-    ? "表示はダミーデータです。除去は画面上だけで、元のデータは変わりません。"
-    : meta.stride > 1
-      ? `表示を軽くするため、${meta.stride}点おきに読み込んでいます(表示${fmt(data.classes.length)}点 / 全${fmt(meta.totalPoints)}点)。除去は画面上だけで、元のファイルは変わりません。`
-      : "除去は画面上だけで、元のファイルは変わりません。";
+  const note =
+  data.classes.length === 0
+    ? "LASファイルを開くと、点群が表示されます。"
+    : !meta
+      ? "表示はダミーデータです。除去は画面上だけで、元のデータは変わりません。"
+      : meta.stride > 1
+        ? `表示を軽くするため、...(元のまま)`
+        : "除去は画面上だけで、元のファイルは変わりません。";
 
   return (
     <div
