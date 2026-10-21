@@ -3,14 +3,23 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { PointCloudData } from "./types";
 
+export type ColorMode = "rgb" | "class";
+
 type Props = {
   data: PointCloudData;
   hidden: Set<number>; // 非表示にするクラス番号
+  colorMode: ColorMode; // rgb: 点のRGB、class: クラスの色
 };
 
-export function PointCloudView({ data, hidden }: Props) {
+type Layer = {
+  points: THREE.Points;
+  classMat: THREE.PointsMaterial;
+  rgbMat: THREE.PointsMaterial | null;
+};
+
+export function PointCloudView({ data, hidden, colorMode }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
-  const layersRef = useRef<Map<number, THREE.Points>>(new Map());
+  const layersRef = useRef<Map<number, Layer>>(new Map());
 
   // 3Dシーンの作成(データが変わったときだけ作り直す)
   useEffect(() => {
@@ -25,47 +34,63 @@ export function PointCloudView({ data, hidden }: Props) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
 
-    // クラスごとに座標をまとめる
+    // クラスごとに座標と色をまとめる
     const counts = new Map<number, number>();
     for (const c of data.classes) counts.set(c, (counts.get(c) ?? 0) + 1);
-    const buffers = new Map<number, Float32Array>();
+    const posBuf = new Map<number, Float32Array>();
+    const colBuf = new Map<number, Uint8Array>();
     const cursor = new Map<number, number>();
     for (const [id, n] of counts) {
-      buffers.set(id, new Float32Array(n * 3));
+      posBuf.set(id, new Float32Array(n * 3));
+      if (data.colors) colBuf.set(id, new Uint8Array(n * 3));
       cursor.set(id, 0);
     }
     const box = new THREE.Box3();
     const tmp = new THREE.Vector3();
     for (let i = 0; i < data.classes.length; i++) {
       const id = data.classes[i];
-      const buf = buffers.get(id)!;
       const k = cursor.get(id)!;
+      const pb = posBuf.get(id)!;
       const x = data.positions[i * 3];
       const y = data.positions[i * 3 + 1];
       const z = data.positions[i * 3 + 2];
-      buf[k] = x;
-      buf[k + 1] = y;
-      buf[k + 2] = z;
+      pb[k] = x;
+      pb[k + 1] = y;
+      pb[k + 2] = z;
+      if (data.colors) {
+        const cb = colBuf.get(id)!;
+        cb[k] = data.colors[i * 3];
+        cb[k + 1] = data.colors[i * 3 + 1];
+        cb[k + 2] = data.colors[i * 3 + 2];
+      }
       cursor.set(id, k + 3);
       box.expandByPoint(tmp.set(x, y, z));
     }
 
-    const layers = new Map<number, THREE.Points>();
-    for (const [id, buf] of buffers) {
+    // 点の大きさと奥行きの範囲は、点群全体の大きさに合わせる
+    const center = box.getCenter(new THREE.Vector3());
+    const diag = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-3);
+    const pointSize = diag / 800;
+    camera.near = diag / 1000;
+    camera.far = diag * 20;
+    camera.updateProjectionMatrix();
+
+    const layers = new Map<number, Layer>();
+    for (const [id, pb] of posBuf) {
       const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.BufferAttribute(buf, 3));
+      geometry.setAttribute("position", new THREE.BufferAttribute(pb, 3));
+      const cb = colBuf.get(id);
+      if (cb) geometry.setAttribute("color", new THREE.BufferAttribute(cb, 3, true));
       const color = data.classDefs.find((d) => d.id === id)?.color ?? "#ffffff";
-      const material = new THREE.PointsMaterial({ size: 0.12, color });
-      const points = new THREE.Points(geometry, material);
+      const classMat = new THREE.PointsMaterial({ size: pointSize, color });
+      const rgbMat = cb ? new THREE.PointsMaterial({ size: pointSize, vertexColors: true }) : null;
+      const points = new THREE.Points(geometry, classMat);
       scene.add(points);
-      layers.set(id, points);
+      layers.set(id, { points, classMat, rgbMat });
     }
     layersRef.current = layers;
 
-    // カメラを点群の中心に向ける
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3()).length();
-    camera.position.set(center.x + size * 0.6, center.y - size * 0.6, center.z + size * 0.45);
+    camera.position.set(center.x + diag * 0.6, center.y - diag * 0.6, center.z + diag * 0.45);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.copy(center);
     controls.update();
@@ -93,21 +118,23 @@ export function PointCloudView({ data, hidden }: Props) {
       cancelAnimationFrame(frame);
       observer.disconnect();
       controls.dispose();
-      for (const p of layers.values()) {
-        p.geometry.dispose();
-        (p.material as THREE.Material).dispose();
+      for (const l of layers.values()) {
+        l.points.geometry.dispose();
+        l.classMat.dispose();
+        l.rgbMat?.dispose();
       }
       renderer.dispose();
       mount.removeChild(renderer.domElement);
     };
   }, [data]);
 
-  // レイヤの表示・非表示の切り替え
+  // レイヤの表示・非表示と、色の切り替え
   useEffect(() => {
-    for (const [id, points] of layersRef.current) {
-      points.visible = !hidden.has(id);
+    for (const [id, l] of layersRef.current) {
+      l.points.visible = !hidden.has(id);
+      l.points.material = colorMode === "rgb" && l.rgbMat ? l.rgbMat : l.classMat;
     }
-  }, [hidden, data]);
+  }, [hidden, colorMode, data]);
 
   return <div className="viewport" ref={mountRef} aria-label="点群の3Dビュー" />;
 }

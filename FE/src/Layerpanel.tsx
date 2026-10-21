@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { ClassDef } from "./types";
 
 type Props = {
@@ -9,6 +10,8 @@ type Props = {
   remainingPoints: number;
   markedPoints: number;
   canUndo: boolean;
+  note: string;
+  children?: ReactNode; // 先頭に表示するファイル操作など
   onToggleHidden: (id: number) => void;
   onToggleMarked: (id: number) => void;
   onRemove: () => void;
@@ -24,6 +27,8 @@ export function LayerPanel(p: Props) {
         <h1>レイヤ</h1>
         <p className="total">残りの点数 {fmt(p.remainingPoints)}</p>
       </header>
+
+      {p.children}
 
       <table className="layers">
         <thead>
@@ -77,7 +82,7 @@ export function LayerPanel(p: Props) {
           元に戻す
         </button>
       </div>
-      <p className="note">表示はダミーデータです。除去は画面上だけで、元のデータは変わりません。</p>
+      <p className="note">{p.note}</p>
     </aside>
   );
 }
