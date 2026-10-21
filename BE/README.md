@@ -3,7 +3,7 @@
 卒業研究「三次元点群データの自動分類ツールの作成、既存ツールとの比較」のPython側。
 画面(フロント)とは別のリポジトリで、**LASファイルを介して**つなぐ。
 
-## 準備
+## 環境構築
 ```
 py -3.12 -m venv .venv          # Macは python3 -m venv .venv
 .venv\Scripts\activate          # Macは source .venv/bin/activate
