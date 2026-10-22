@@ -51,3 +51,10 @@ def test_size_mismatch_raises():
 def test_all_ignored_raises():
     with pytest.raises(ValueError):
         evaluate(np.ones(3, np.uint8), np.ones(3, np.uint8), ignore=[1])
+
+
+def test_mapping_truth():
+    truth = np.array([3, 4, 5, 2], dtype=np.uint8)  # 正解データを作ったソフトでは、植栽が3・4・5に分かれている
+    pred = np.array([5, 5, 5, 2], dtype=np.uint8)
+    assert evaluate(truth, pred).corrections == 2
+    assert evaluate(truth, pred, truth_mapping={3: 5, 4: 5}).corrections == 0

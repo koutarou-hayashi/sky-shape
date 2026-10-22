@@ -62,17 +62,26 @@ def remap(classes: np.ndarray, mapping: dict[int, int]) -> np.ndarray:
     return lut[classes]
 
 
-def evaluate(truth: np.ndarray, pred: np.ndarray, ignore=(), mapping: dict[int, int] | None = None) -> Result:
+def evaluate(
+    truth: np.ndarray,
+    pred: np.ndarray,
+    ignore=(),
+    mapping: dict[int, int] | None = None,
+    truth_mapping: dict[int, int] | None = None,
+) -> Result:
     """truth: 正解の分類、pred: 予測の分類(同じ点の順番・同じ点数)。
 
     ignore: 評価から外す正解の分類コード(例: 正解データを作っていない未分類の点)
     mapping: 予測の分類コードの読み替え
+    truth_mapping: 正解の分類コードの読み替え(正解データを作ったソフトの分類コードが違うとき)
     """
     if truth.shape != pred.shape:
         raise ValueError(
             f"点数が違います(正解 {truth.size:,} / 予測 {pred.size:,})。"
             "同じ点を同じ順番で保存したファイル同士でないと比較できません。"
         )
+    if truth_mapping:
+        truth = remap(truth, truth_mapping)
     if mapping:
         pred = remap(pred, mapping)
     if len(ignore) > 0:

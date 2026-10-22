@@ -3,7 +3,7 @@
 卒業研究「三次元点群データの自動分類ツールの作成、既存ツールとの比較」のPython側。
 画面(フロント)とは別のリポジトリで、**LASファイルを介して**つなぐ。
 
-## 環境構築
+## 準備
 ```
 py -3.12 -m venv .venv          # Macは python3 -m venv .venv
 .venv\Scripts\activate          # Macは source .venv/bin/activate
@@ -14,6 +14,7 @@ pip install -r requirements.txt
 ```
 python -m ptcloud info data/sample.las
 python -m ptcloud classify data/in.las outputs/classified.las
+python -m ptcloud classify-dir data/tiles outputs/tiles
 python -m ptcloud evaluate --truth data/truth.las --pred data/pred.las --ignore 1 --csv outputs/result.csv
 python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 ```
@@ -21,6 +22,9 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 - `classify`: ルールベースの簡易分類(地面・植栽・建物・電線・電柱の5クラス)をして、分類コードを書き込んだLASを保存する。
   それ以外の点は未分類(1)。しきい値は `--voxel 0.4` のように指定できる(一覧は `ptcloud/rules.py` の `Params`)。
   座標を全部メモリに読むので、2,274万点で数GBを使う。
+- `classify-dir`: フォルダ内のLASを、ファイル名の番号順にまとめて分類して、別のフォルダに同じ名前で保存する。
+  すでにあるファイルはスキップ(`--force` で上書き)、1ファイルが失敗しても止まらず、最後に一覧を表示する。
+  タイルごとに処理するので、タイルの境目では、まわりの点が足りず、精度が少し落ちることがある。
 - `evaluate`: 正解のLASと予測のLASを、点ごとに比べる(同じ点を同じ順番で保存したファイル同士)。
   **手動で修正が必要な点数**、クラスごとの適合率・再現率・IoU、混同行列を出す。
 - `remove`: 指定したクラスの点を除いて、別のファイルに保存する。元のファイルは変えない。

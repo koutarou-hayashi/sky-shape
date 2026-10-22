@@ -5,15 +5,20 @@ LASの classification(分類)の値を、このプロジェクトのクラスに
 (LAS 1.2の点形式0〜5は、分類が0〜31まで。20番台は独自コードとして使っている)
 """
 
-# このプロジェクトのクラス(仮の割り当て)
+# 今回の現場データ(池・森・駐車場・道路)で使うクラス。評価と学習の対象。
 PROJECT_CLASSES: dict[int, str] = {
-    1: "未分類",
+    1: "その他(未分類)",
     2: "地面・路面",
     5: "植栽",
     6: "建物",
+    9: "水面",
+    20: "車両",
+}
+
+# 街並みのデータ(会社のデータなど)で使う予定のクラス。今回は使わないが、コードは先に決めておく。
+FUTURE_CLASSES: dict[int, str] = {
     14: "電線",
     15: "電柱",
-    20: "車両",
     21: "標識",
     22: "人物",
     23: "道路標識",
@@ -28,4 +33,4 @@ ASPRS_NAMES: dict[int, str] = {
 
 
 def class_name(code: int) -> str:
-    return PROJECT_CLASSES.get(code) or ASPRS_NAMES.get(code) or f"クラス{code}"
+    return PROJECT_CLASSES.get(code) or FUTURE_CLASSES.get(code) or ASPRS_NAMES.get(code) or f"クラス{code}"
