@@ -17,6 +17,25 @@ type Layer = {
   rgbMat: THREE.PointsMaterial | null;
 };
 
+// 軸の先端に文字（X, Y, Z）を表示するためのヘルパー関数
+function createAxisLabel(text: string, color: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = color;
+  ctx.font = "bold 48px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 32, 32);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(0.4, 0.4, 0.4);
+  return sprite;
+}
+
 export function PointCloudView({ data, hidden, colorMode }: Props) {
   const mountRef = useRef<HTMLDivElement>(null);
   const layersRef = useRef<Map<number, Layer>>(new Map());
@@ -41,6 +60,19 @@ export function PointCloudView({ data, hidden, colorMode }: Props) {
     
     const axesHelper = new THREE.AxesHelper(2);
     gizmoScene.add(axesHelper);
+
+    // ★各軸の先端にX, Y, Zのラベルを追加（赤=X, 緑=Y, 青=Z）
+    const labelX = createAxisLabel("X", "#ff3653");
+    labelX.position.set(2.2, 0, 0);
+    gizmoScene.add(labelX);
+
+    const labelY = createAxisLabel("Y", "#009b0d");
+    labelY.position.set(0, 2.2, 0);
+    gizmoScene.add(labelY);
+
+    const labelZ = createAxisLabel("Z", "#2575fc");
+    labelZ.position.set(0, 0, 2.2);
+    gizmoScene.add(labelZ);
     // ----------------------------------------------------
 
     // クラスごとに座標と色をまとめる
@@ -79,18 +111,11 @@ export function PointCloudView({ data, hidden, colorMode }: Props) {
     const center = box.getCenter(new THREE.Vector3());
     const diag = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-3);
 
-    // --- ★メインシーンにグリッド（床面）を追加 ---
-    // 引数: (サイズ, 分割数, 中心の線の色, グリッドの線の色)
+    // メインシーンにグリッド（床面）を追加
     const gridHelper = new THREE.GridHelper(diag, 20, 0x888888, 0x444444);
-    // 測量データはZが上なので、グリッドをXY平面からXZまたはYZに起こす必要がある場合があります。
-    // Three.jsのGridHelperはデフォルトでXZ平面（Yが上）に作られるため、
-    // Zが上のデータに合わせるには回転させるか、あるいはそのままにするか調整します。
-    // Zが上の場合、グリッドを水平（XY平面、つまりZの高さ）にするには以下のように回転させます：
     gridHelper.rotation.x = Math.PI / 2;
-    // 足元（一番低いZ座標）に配置
     gridHelper.position.set(center.x, center.y, box.min.z);
     scene.add(gridHelper);
-    // ----------------------------------------
 
     const pointSize = diag / 800;
     camera.near = diag / 1000;
@@ -167,7 +192,15 @@ export function PointCloudView({ data, hidden, colorMode }: Props) {
       observer.disconnect();
       controls.dispose();
       axesHelper.dispose();
-      gridHelper.dispose(); // クリーンアップに追加
+      gridHelper.dispose();
+      // ラベルのテクスチャやマテリアルの破棄
+      labelX.material.map?.dispose();
+      labelX.material.dispose();
+      labelY.material.map?.dispose();
+      labelY.material.dispose();
+      labelZ.material.map?.dispose();
+      labelZ.material.dispose();
+
       for (const l of layers.values()) {
         l.points.geometry.dispose();
         l.classMat.dispose();
