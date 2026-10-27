@@ -27,6 +27,8 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 - `classify-dir`: フォルダ内のLASを、ファイル名の番号順にまとめて分類して、別のフォルダに同じ名前で保存する。
   すでにあるファイルはスキップ(`--force` で上書き)、1ファイルが失敗しても止まらず、最後に一覧を表示する。
   タイルごとに処理するので、タイルの境目では、まわりの点が足りず、精度が少し落ちることがある。
+- `ground`: 地面だけを抽出して保存する(地面=2、それ以外=1)。**傾斜(法面)に対応**。WingEarthの地面(2)と見比べるのに使う。
+- `stats`: 分類ごとの、高さ・色・平らさなどの分布を表示する(ルールのしきい値を決める手がかり)。
 - `train`: 正解の分類が入ったLAS(WingEarthなどで手動分類したもの)で学習して、モデル(.joblib)を保存する。
   `--valid` で検証用のLASを別に指定できる。指定しなければ、学習用を25mの帯に区切り、間をあけて約3割を検証にする。
   検証の結果(手動で修正が必要な点数、クラスごとの精度)を表示する。**検証に正解がないクラスは、評価できない**。
@@ -42,6 +44,8 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 ## 構成
 - `ptcloud/classes.py` 分類コードと名前の表(**仮の割り当て**。クラスを変えるときはここを直す)
 - `ptcloud/lasio.py` LASの読み書き(一定の点数ずつ処理する)
+- `ptcloud/ground.py` 地面の抽出(傾斜対応)。ルールベースへの組み込みは、これから
+- `ptcloud/stats.py` 分類ごとの特徴の分布
 - `ptcloud/rules.py` ルールベースの簡易分類(比較の基準値)
 - `ptcloud/features.py` 機械学習用の特徴量(高さ、色、まわりの点の並び方)
 - `ptcloud/ml.py` 学習と予測(HistGradientBoosting)

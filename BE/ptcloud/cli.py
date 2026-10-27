@@ -4,6 +4,8 @@
   evaluate  正解のLASと予測のLASを比べて、精度を出す
   classify      ルールベースの簡易分類をして、分類つきのLASを保存する
   classify-dir  フォルダ内のLASを、まとめて簡易分類する
+  ground        地面だけを抽出する(傾斜に対応)
+  stats         分類ごとの特徴の分布を見る(ルールのしきい値を決める手がかり)
   train         正解つきのLASで学習して、モデルを保存する
   predict       学習したモデルで分類する(predict-dir はフォルダまとめて)
   remove    指定したクラスの点を取り除いて、別のファイルに保存する
@@ -161,6 +163,36 @@ def cmd_classify_dir(args) -> int:
     return _run_dir(args, lambda src, dst: _classify_file(src, dst, params))
 
 
+def cmd_ground(args) -> int:
+    from . import ground
+
+    src, dst = Path(args.src), Path(args.dst)
+    if src.resolve() == dst.resolve():
+        print("エラー: 元のファイルは上書きできません。別の名前を指定してください。", file=sys.stderr)
+        return 1
+    if dst.exists() and not args.force:
+        print(f"エラー: {dst} がすでにあります。上書きする場合は --force を付けてください。", file=sys.stderr)
+        return 1
+    p = ground.GroundParams(**{n: getattr(args, n) for n in ("cell", "window", "coarse", "tol", "point_tol")
+                               if getattr(args, n) is not None})
+    xyz = lasio.read_xyz(src)
+    is_ground, height = ground.find_ground(xyz, p)
+    classes = np.where(is_ground, 2, 1).astype(np.uint8)  # 地面=2、それ以外=1
+    lasio.write_classification(src, dst, classes)
+    print(f"{len(xyz):,}点のうち、地面 {int(is_ground.sum()):,}点({is_ground.mean():.1%})")
+    print(f"地面からの高さ(地面以外): 中央値 {np.median(height[~is_ground]):.1f}m、90% {np.percentile(height[~is_ground], 90):.1f}m"
+          if (~is_ground).any() else "地面以外の点はありません")
+    print(f"保存しました: {dst}")
+    return 0
+
+
+def cmd_stats(args) -> int:
+    from . import stats
+
+    print(stats.format_stats(stats.class_stats(args.files, max_points=args.max_points)))
+    return 0
+
+
 def cmd_train(args) -> int:
     from . import ml  # scikit-learnが必要なので、このコマンドを使うときだけ読み込む
 
@@ -259,6 +291,19 @@ def main(argv=None) -> None:
     a.add_argument("--force", action="store_true", help="保存先にすでにあるファイルも、上書きする")
     _add_param_args(a)
     a.set_defaults(func=cmd_classify_dir)
+
+    a = sub.add_parser("ground", help="地面だけを抽出して保存する(傾斜に対応。地面=2、それ以外=1)")
+    a.add_argument("src")
+    a.add_argument("dst")
+    a.add_argument("--force", action="store_true")
+    for name, typ in (("cell", float), ("window", int), ("coarse", int), ("tol", float), ("point_tol", float)):
+        a.add_argument(f"--{name.replace('_', '-')}", dest=name, type=typ, default=None, help="しきい値。既定値は ground.py の GroundParams を参照")
+    a.set_defaults(func=cmd_ground)
+
+    a = sub.add_parser("stats", help="分類ごとの特徴(高さ・色・平らさなど)の分布を見る")
+    a.add_argument("files", nargs="+", help="分類が入ったLAS(WingEarthの結果など)")
+    a.add_argument("--max-points", type=int, default=1_000_000, help="1クラスで使う点数の上限(既定 100万)")
+    a.set_defaults(func=cmd_stats)
 
     a = sub.add_parser("train", help="正解つきのLASで学習して、モデルを保存する")
     a.add_argument("--truth", nargs="+", required=True, help="正解の分類が入ったLAS(学習用)")
