@@ -7,8 +7,8 @@ export type ColorMode = "rgb" | "class";
 
 type Props = {
   data: PointCloudData;
-  hidden: Set<number>; // 非表示にするクラス番号
-  colorMode: ColorMode; // rgb: 点のRGB、class: クラスの色
+  hidden: Set<number>;
+  colorMode: ColorMode;
 };
 
 type Layer = {
@@ -33,6 +33,15 @@ export function PointCloudView({ data, hidden, colorMode }: Props) {
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
+
+    // --- 画面の左下に常駐する方位ギズモ用のシーンを作成 ---
+    const gizmoScene = new THREE.Scene();
+    const gizmoCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+    gizmoCamera.up.set(0, 0, 1);
+    
+    const axesHelper = new THREE.AxesHelper(2);
+    gizmoScene.add(axesHelper);
+    // ----------------------------------------------------
 
     // クラスごとに座標と色をまとめる
     const counts = new Map<number, number>();
@@ -67,9 +76,22 @@ export function PointCloudView({ data, hidden, colorMode }: Props) {
       box.expandByPoint(tmp.set(x, y, z));
     }
 
-    // 点の大きさと奥行きの範囲は、点群全体の大きさに合わせる
     const center = box.getCenter(new THREE.Vector3());
     const diag = Math.max(box.getSize(new THREE.Vector3()).length(), 1e-3);
+
+    // --- ★メインシーンにグリッド（床面）を追加 ---
+    // 引数: (サイズ, 分割数, 中心の線の色, グリッドの線の色)
+    const gridHelper = new THREE.GridHelper(diag, 20, 0x888888, 0x444444);
+    // 測量データはZが上なので、グリッドをXY平面からXZまたはYZに起こす必要がある場合があります。
+    // Three.jsのGridHelperはデフォルトでXZ平面（Yが上）に作られるため、
+    // Zが上のデータに合わせるには回転させるか、あるいはそのままにするか調整します。
+    // Zが上の場合、グリッドを水平（XY平面、つまりZの高さ）にするには以下のように回転させます：
+    gridHelper.rotation.x = Math.PI / 2;
+    // 足元（一番低いZ座標）に配置
+    gridHelper.position.set(center.x, center.y, box.min.z);
+    scene.add(gridHelper);
+    // ----------------------------------------
+
     const pointSize = diag / 800;
     camera.near = diag / 1000;
     camera.far = diag * 20;
@@ -110,7 +132,33 @@ export function PointCloudView({ data, hidden, colorMode }: Props) {
     const animate = () => {
       frame = requestAnimationFrame(animate);
       controls.update();
+
+      // --- 1. メインの点群シーンを描画 ---
+      renderer.setViewport(0, 0, mount.clientWidth, mount.clientHeight);
+      renderer.setScissor(0, 0, mount.clientWidth, mount.clientHeight);
+      renderer.setScissorTest(false);
       renderer.render(scene, camera);
+
+      // --- 2. 画面の【左下】に方位ギズモを重ねて描画 ---
+      const gizmoSize = 120; // ギズモの表示サイズ（ピクセル）
+      const margin = 20;     // 画面端からの余白
+      const gx = margin;                 // 左からの距離
+      const gy = margin;                 // 下からの距離
+
+      // メインカメラの回転をギズモカメラに同期
+      const gizmoDist = 4;
+      gizmoCamera.position.copy(camera.position).sub(controls.target).normalize().multiplyScalar(gizmoDist);
+      gizmoCamera.up.copy(camera.up);
+      gizmoCamera.lookAt(0, 0, 0);
+
+      renderer.setViewport(gx, gy, gizmoSize, gizmoSize);
+      renderer.setScissor(gx, gy, gizmoSize, gizmoSize);
+      renderer.setScissorTest(true);
+      
+      renderer.autoClear = false;
+      renderer.clearDepth();
+      renderer.render(gizmoScene, gizmoCamera);
+      renderer.autoClear = true;
     };
     animate();
 
@@ -118,6 +166,8 @@ export function PointCloudView({ data, hidden, colorMode }: Props) {
       cancelAnimationFrame(frame);
       observer.disconnect();
       controls.dispose();
+      axesHelper.dispose();
+      gridHelper.dispose(); // クリーンアップに追加
       for (const l of layers.values()) {
         l.points.geometry.dispose();
         l.classMat.dispose();
