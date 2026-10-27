@@ -5,6 +5,8 @@
   classify      ルールベースの簡易分類をして、分類つきのLASを保存する
   classify-dir  フォルダ内のLASを、まとめて簡易分類する
   ground        地面だけを抽出する(傾斜に対応)
+  water-check   水面の取りこぼしの原因を調べる
+  water         水面だけを抽出する(色・平らさ・広がり。water-dir はフォルダまとめて)
   stats         分類ごとの特徴の分布を見る(ルールのしきい値を決める手がかり)
   train         正解つきのLASで学習して、モデルを保存する
   predict       学習したモデルで分類する(predict-dir はフォルダまとめて)
@@ -163,6 +165,41 @@ def cmd_classify_dir(args) -> int:
     return _run_dir(args, lambda src, dst: _classify_file(src, dst, params))
 
 
+def _water_file(src: Path, dst: Path) -> dict:
+    """1ファイルの水面を抽出して保存する(水面=9、それ以外=1)。分類コードごとの点数を返す。"""
+    from . import water
+
+    xyz, rgb, _, _ = lasio.read_points(src)
+    classes = np.where(water.find_water(xyz, rgb), 9, 1).astype(np.uint8)
+    lasio.write_classification(src, dst, classes)
+    return {int(c): int(n) for c, n in zip(*np.unique(classes, return_counts=True))}
+
+
+def cmd_water(args) -> int:
+    src, dst = Path(args.src), Path(args.dst)
+    if src.resolve() == dst.resolve():
+        print("エラー: 元のファイルは上書きできません。別の名前を指定してください。", file=sys.stderr)
+        return 1
+    if dst.exists() and not args.force:
+        print(f"エラー: {dst} がすでにあります。上書きする場合は --force を付けてください。", file=sys.stderr)
+        return 1
+    print(_summary(_water_file(src, dst)))
+    print(f"保存しました: {dst}")
+    return 0
+
+
+def cmd_water_check(args) -> int:
+    from . import water
+
+    xyz, rgb, _, cls = lasio.read_points(args.file)
+    print(water.diagnose(xyz, rgb, cls == args.truth_class))
+    return 0
+
+
+def cmd_water_dir(args) -> int:
+    return _run_dir(args, _water_file)
+
+
 def cmd_ground(args) -> int:
     from . import ground
 
@@ -291,6 +328,24 @@ def main(argv=None) -> None:
     a.add_argument("--force", action="store_true", help="保存先にすでにあるファイルも、上書きする")
     _add_param_args(a)
     a.set_defaults(func=cmd_classify_dir)
+
+    a = sub.add_parser("water", help="水面だけを抽出して保存する(水面=9、それ以外=1)")
+    a.add_argument("src")
+    a.add_argument("dst")
+    a.add_argument("--force", action="store_true")
+    a.set_defaults(func=cmd_water)
+
+    a = sub.add_parser("water-check", help="水面の判定で、本当の水面(WingEarthの水など)を、どの条件で取りこぼすかを調べる")
+    a.add_argument("file", help="水面の分類が入ったLAS")
+    a.add_argument("--truth-class", type=int, default=9, help="水面の分類コード(既定 9)")
+    a.set_defaults(func=cmd_water_check)
+
+    a = sub.add_parser("water-dir", help="フォルダ内のLASから、水面をまとめて抽出する")
+    a.add_argument("src_dir")
+    a.add_argument("dst_dir")
+    a.add_argument("--pattern", default="*.las")
+    a.add_argument("--force", action="store_true")
+    a.set_defaults(func=cmd_water_dir)
 
     a = sub.add_parser("ground", help="地面だけを抽出して保存する(傾斜に対応。地面=2、それ以外=1)")
     a.add_argument("src")
