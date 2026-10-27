@@ -63,6 +63,40 @@ def read_xyz(path: str | Path, chunk: int = CHUNK) -> np.ndarray:
     return out
 
 
+def read_points(path: str | Path, chunk: int = CHUNK):
+    """座標(原点を引いた相対座標)、色(0〜1)、強度(0〜1)、分類を、まとめて読む。(機械学習用)
+
+    色は、16ビット(0〜65535)か8ビット(0〜255)かを、最大値で見分けて0〜1にそろえる。
+    色がないファイルでは、色は0になる。
+    """
+    with laspy.open(path) as r:
+        h = r.header
+        n = h.point_count
+        has_rgb = "red" in h.point_format.dimension_names
+        origin = np.array(h.mins, dtype=np.float64)
+        xyz = np.empty((n, 3), dtype=np.float32)
+        rgb = np.zeros((n, 3), dtype=np.float32)
+        inten = np.empty(n, dtype=np.float32)
+        cls = np.empty(n, dtype=np.uint8)
+        pos = 0
+        for pts in r.chunk_iterator(chunk):
+            m = len(pts)
+            xyz[pos : pos + m, 0] = pts.x - origin[0]
+            xyz[pos : pos + m, 1] = pts.y - origin[1]
+            xyz[pos : pos + m, 2] = pts.z - origin[2]
+            inten[pos : pos + m] = pts.intensity
+            cls[pos : pos + m] = _classes(pts)
+            if has_rgb:
+                rgb[pos : pos + m, 0] = pts.red
+                rgb[pos : pos + m, 1] = pts.green
+                rgb[pos : pos + m, 2] = pts.blue
+            pos += m
+    if has_rgb and rgb.max() > 0:
+        rgb /= 65535.0 if rgb.max() > 255 else 255.0
+    inten /= 65535.0
+    return xyz, rgb, inten, cls
+
+
 def remove_classes(src: str | Path, dst: str | Path, codes: list[int], chunk: int = CHUNK) -> dict:
     """指定した分類コードの点を取り除いて、別のファイルに保存する。
 

@@ -60,8 +60,8 @@ def _min_filter_1d(a: np.ndarray, r: int, axis: int) -> np.ndarray:
     return np.moveaxis(out, 0, axis)
 
 
-def _ground(xyz: np.ndarray, p: Params):
-    """各点が地面かどうかと、地面からの高さを返す。"""
+def _ground_detail(xyz: np.ndarray, p: Params):
+    """各点が地面かどうか、地面からの高さ、区画の一番低い点からの高さ、区画と周りの高さの差を返す。"""
     x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
     ix = ((x - x.min()) / p.ground_cell).astype(np.int64)
     iy = ((y - y.min()) / p.ground_cell).astype(np.int64)
@@ -71,7 +71,13 @@ def _ground(xyz: np.ndarray, p: Params):
     surface = _min_filter_1d(_min_filter_1d(cell, r, 0), r, 1)  # 近くの一番低い高さ
     cell_min, surf = cell[ix, iy], surface[ix, iy]
     is_ground = (z <= cell_min + p.ground_tol) & (cell_min - surf <= p.ground_max_step)
-    return is_ground, (z - surf).astype(np.float32)
+    return is_ground, (z - surf).astype(np.float32), (z - cell_min).astype(np.float32), (cell_min - surf).astype(np.float32)
+
+
+def _ground(xyz: np.ndarray, p: Params):
+    """各点が地面かどうかと、地面からの高さを返す。"""
+    is_ground, height, _, _ = _ground_detail(xyz, p)
+    return is_ground, height
 
 
 _OFFSETS = [
@@ -139,6 +145,8 @@ class _Voxels:
         self.flat = w[:, 0] / l1  # 一番薄い方向の薄さ(0に近いほど平らな面)
         self.mid = w[:, 1] / l1  # 2番目の方向の広がり(0に近いと線)
         self.hspread = np.sqrt(cov[:, 0, 0] + cov[:, 1, 1])  # 水平方向の点のばらつき(m)
+        self.zstd = np.sqrt(np.maximum(cov[:, 2, 2], 0))  # 高さ方向の点のばらつき(m)
+        self.count = cnt  # ボクセルの中の点数
         self.axis_z = np.abs(vec[:, 2, 2])  # 主方向の鉛直成分(1なら垂直な線)
         self.normal_z = np.abs(vec[:, 2, 0])  # 法線の鉛直成分(0なら垂直な面=壁)
         self.height = total(height.astype(np.float64)) / cnt  # ボクセルの地面からの高さ

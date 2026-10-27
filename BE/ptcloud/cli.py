@@ -4,6 +4,8 @@
   evaluate  正解のLASと予測のLASを比べて、精度を出す
   classify      ルールベースの簡易分類をして、分類つきのLASを保存する
   classify-dir  フォルダ内のLASを、まとめて簡易分類する
+  train         正解つきのLASで学習して、モデルを保存する
+  predict       学習したモデルで分類する(predict-dir はフォルダまとめて)
   remove    指定したクラスの点を取り除いて、別のファイルに保存する
 """
 import argparse
@@ -111,7 +113,8 @@ def _natural_key(p: Path):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", p.name)]
 
 
-def cmd_classify_dir(args) -> int:
+def _run_dir(args, work) -> int:
+    """src_dir のLASを番号順に、work(src, dst) -> {分類コード: 点数} で処理して、dst_dir に同じ名前で保存する。"""
     import time
 
     src_dir, dst_dir = Path(args.src_dir), Path(args.dst_dir)
@@ -126,7 +129,6 @@ def cmd_classify_dir(args) -> int:
         print(f"エラー: {src_dir} に {args.pattern} に合うファイルがありません。", file=sys.stderr)
         return 1
     dst_dir.mkdir(parents=True, exist_ok=True)
-    params = _params(args)
     total: dict = {}
     failed, skipped = [], 0
     t0 = time.time()
@@ -138,13 +140,13 @@ def cmd_classify_dir(args) -> int:
             continue
         t1 = time.time()
         try:
-            counts = _classify_file(src, dst, params)
+            counts = work(src, dst)
         except Exception as e:  # 1ファイルの失敗で、全体を止めない
             failed.append(src.name)
             print(f"[{i}/{len(files)}] {src.name}: 失敗 ({type(e).__name__}: {e})", file=sys.stderr)
             continue
-        for c, n in counts.items():
-            total[c] = total.get(c, 0) + n
+        for code, n in counts.items():
+            total[code] = total.get(code, 0) + n
         print(f"[{i}/{len(files)}] {src.name}: {sum(counts.values()):,}点 {time.time() - t1:.1f}秒  {_summary(counts)}")
     print(f"\n完了: {len(files) - len(failed) - skipped}件を分類、{skipped}件をスキップ、{len(failed)}件が失敗({time.time() - t0:.0f}秒)")
     if total:
@@ -152,6 +154,49 @@ def cmd_classify_dir(args) -> int:
     if failed:
         print("失敗したファイル: " + ", ".join(failed), file=sys.stderr)
     return 1 if failed else 0
+
+
+def cmd_classify_dir(args) -> int:
+    params = _params(args)
+    return _run_dir(args, lambda src, dst: _classify_file(src, dst, params))
+
+
+def cmd_train(args) -> int:
+    from . import ml  # scikit-learnが必要なので、このコマンドを使うときだけ読み込む
+
+    result = ml.train(args.truth, args.model, valid_paths=args.valid, valid_frac=args.valid_frac, block=args.block,
+                      balanced=args.balanced, max_iter=args.max_iter)
+    if result is None:
+        print("検証用のデータがないので、精度は測っていません。")
+        return 0
+    print(ev.format_report(result))
+    if args.csv:
+        ev.save_csv(result, args.csv)
+        print(f"\nCSVに保存しました: {args.csv}")
+    return 0
+
+
+def cmd_predict(args) -> int:
+    from . import ml
+
+    src, dst = Path(args.src), Path(args.dst)
+    if src.resolve() == dst.resolve():
+        print("エラー: 元のファイルは上書きできません。別の名前を指定してください。", file=sys.stderr)
+        return 1
+    if dst.exists() and not args.force:
+        print(f"エラー: {dst} がすでにあります。上書きする場合は --force を付けてください。", file=sys.stderr)
+        return 1
+    counts = ml.predict_file(ml.load_model(args.model), src, dst)
+    print(_summary(counts))
+    print(f"保存しました: {dst}")
+    return 0
+
+
+def cmd_predict_dir(args) -> int:
+    from . import ml
+
+    bundle = ml.load_model(args.model)
+    return _run_dir(args, lambda src, dst: ml.predict_file(bundle, src, dst))
 
 
 def cmd_remove(args) -> int:
@@ -214,6 +259,32 @@ def main(argv=None) -> None:
     a.add_argument("--force", action="store_true", help="保存先にすでにあるファイルも、上書きする")
     _add_param_args(a)
     a.set_defaults(func=cmd_classify_dir)
+
+    a = sub.add_parser("train", help="正解つきのLASで学習して、モデルを保存する")
+    a.add_argument("--truth", nargs="+", required=True, help="正解の分類が入ったLAS(学習用)")
+    a.add_argument("--model", required=True, help="モデルの保存先(.joblib)")
+    a.add_argument("--valid", nargs="*", default=[], help="検証用のLAS(指定しなければ、学習用を帯に区切って一部を検証に使う)")
+    a.add_argument("--valid-frac", type=float, default=0.3, help="--valid がないとき、何割を検証にするか(既定 0.3)")
+    a.add_argument("--block", type=float, default=25.0, help="--valid-frac で分けるときの、帯の幅(m、既定 25)")
+    a.add_argument("--balanced", action="store_true", help="点数の少ないクラスを重く扱う")
+    a.add_argument("--max-iter", type=int, default=200, help="学習の繰り返しの上限(既定 200)")
+    a.add_argument("--csv", help="検証の結果をCSVに保存する")
+    a.set_defaults(func=cmd_train)
+
+    a = sub.add_parser("predict", help="学習したモデルで分類して保存する(1ファイル)")
+    a.add_argument("--model", required=True)
+    a.add_argument("src")
+    a.add_argument("dst")
+    a.add_argument("--force", action="store_true")
+    a.set_defaults(func=cmd_predict)
+
+    a = sub.add_parser("predict-dir", help="学習したモデルで、フォルダ内のLASをまとめて分類する")
+    a.add_argument("--model", required=True)
+    a.add_argument("src_dir")
+    a.add_argument("dst_dir")
+    a.add_argument("--pattern", default="*.las")
+    a.add_argument("--force", action="store_true")
+    a.set_defaults(func=cmd_predict_dir)
 
     a = sub.add_parser("remove", help="指定したクラスの点を取り除いて保存する")
     a.add_argument("src", help="元のLAS(変更しない)")

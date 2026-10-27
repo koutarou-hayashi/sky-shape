@@ -15,6 +15,8 @@ pip install -r requirements.txt
 python -m ptcloud info data/sample.las
 python -m ptcloud classify data/in.las outputs/classified.las
 python -m ptcloud classify-dir data/tiles outputs/tiles
+python -m ptcloud train --truth data/truth.las --model outputs/model.joblib --csv outputs/valid.csv
+python -m ptcloud predict-dir --model outputs/model.joblib data/tiles outputs/pred
 python -m ptcloud evaluate --truth data/truth.las --pred data/pred.las --ignore 1 --csv outputs/result.csv
 python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 ```
@@ -25,6 +27,13 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 - `classify-dir`: フォルダ内のLASを、ファイル名の番号順にまとめて分類して、別のフォルダに同じ名前で保存する。
   すでにあるファイルはスキップ(`--force` で上書き)、1ファイルが失敗しても止まらず、最後に一覧を表示する。
   タイルごとに処理するので、タイルの境目では、まわりの点が足りず、精度が少し落ちることがある。
+- `train`: 正解の分類が入ったLAS(WingEarthなどで手動分類したもの)で学習して、モデル(.joblib)を保存する。
+  `--valid` で検証用のLASを別に指定できる。指定しなければ、学習用を25mの帯に区切り、間をあけて約3割を検証にする。
+  検証の結果(手動で修正が必要な点数、クラスごとの精度)を表示する。**検証に正解がないクラスは、評価できない**。
+  点数の少ないクラス(車両など)が当たらないときは `--balanced`。
+- `predict` / `predict-dir`: 学習したモデルで、LASを分類して保存する(フォルダまとめては predict-dir)。
+  特徴量は、座標や標高そのものを使わず、地面からの高さ・色・まわりの点の並び方だけなので、別のタイルや別の現場にも当てはめられる。
+  メモリのため、1ファイルは数十万点(今回のタイル)ほどにしておく。
 - `evaluate`: 正解のLASと予測のLASを、点ごとに比べる(同じ点を同じ順番で保存したファイル同士)。
   **手動で修正が必要な点数**、クラスごとの適合率・再現率・IoU、混同行列を出す。
 - `remove`: 指定したクラスの点を除いて、別のファイルに保存する。元のファイルは変えない。
@@ -34,6 +43,8 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 - `ptcloud/classes.py` 分類コードと名前の表(**仮の割り当て**。クラスを変えるときはここを直す)
 - `ptcloud/lasio.py` LASの読み書き(一定の点数ずつ処理する)
 - `ptcloud/rules.py` ルールベースの簡易分類(比較の基準値)
+- `ptcloud/features.py` 機械学習用の特徴量(高さ、色、まわりの点の並び方)
+- `ptcloud/ml.py` 学習と予測(HistGradientBoosting)
 - `ptcloud/evaluate.py` 精度の評価
 - `ptcloud/cli.py` コマンドの入口
 - `tests/` テスト(`pip install pytest` のあと、`pytest`)
@@ -45,5 +56,5 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 
 ## 今後の予定
 1. 実データ(正解つきの小さな範囲)での、簡易分類の調整と評価
-2. 特徴量+従来の機械学習による分類(第1段階)
+2. 特徴量+従来の機械学習による分類(第1段階)← `train` / `predict` まで作成済み。正解データでの学習・評価はこれから
 3. 深層学習による分類(第2段階、余裕があれば)
