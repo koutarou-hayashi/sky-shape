@@ -35,28 +35,33 @@ class WaterParams:
     z_tol: float = 0.3  # つながりの中央の高さから、この範囲の点だけを水面にする(m)
 
 
-def _stages(xyz: np.ndarray, rgb: np.ndarray, p: WaterParams) -> dict:
-    """判定の途中経過(点ごとの、各条件に合うか)を、辞書で返す。診断(diagnose)にも使う。"""
+def _prepare(xyz: np.ndarray, rgb: np.ndarray, p: WaterParams) -> dict:
+    """しきい値に左右されない部分(色の値、形の値、区画の番号)を、先に計算する。しきい値を変えて何度も試すとき、ここは1回で済む。"""
     n = len(xyz)
     r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
-    bright = (r + g + b) / 3
-    exg = 2 * g - r - b
-    sat = (rgb.max(axis=1) - rgb.min(axis=1)) / (rgb.max(axis=1) + 1e-6)
+    v = _Voxels(xyz.astype(np.float64), np.zeros(n), p.voxel, 3)
+    ix = ((xyz[:, 0] - xyz[:, 0].min()) / p.cell).astype(np.int64)
+    iy = ((xyz[:, 1] - xyz[:, 1].min()) / p.cell).astype(np.int64)
+    return dict(
+        bright=(r + g + b) / 3, exg=2 * g - r - b,
+        sat=(rgb.max(axis=1) - rgb.min(axis=1)) / (rgb.max(axis=1) + 1e-6),
+        ok_v=v.ok[v.inv], flat=v.flat[v.inv].astype(np.float32), normal=v.normal_z[v.inv].astype(np.float32),
+        ix=ix, iy=iy, nx=int(ix.max()) + 1, ny=int(iy.max()) + 1,
+    )
+
+
+def _decide(pre: dict, xyz: np.ndarray, p: WaterParams) -> dict:
+    """_prepare の結果に、しきい値を当てはめて、水面を決める。判定の途中経過(点ごと)も、辞書で返す。"""
+    n = len(xyz)
+    bright, sat, exg = pre["bright"], pre["sat"], pre["exg"]
     ok_b = (bright >= p.brightness[0]) & (bright <= p.brightness[1])
     ok_s = (sat >= p.saturation[0]) & (sat <= p.saturation[1])
     ok_e = (exg >= p.exg[0]) & (exg <= p.exg[1])
-
-    # 形: 平らで水平
-    v = _Voxels(xyz.astype(np.float64), np.zeros(n), p.voxel, 3)
-    ok_v = v.ok[v.inv]  # ボクセルの点数が足りて、形を調べられる
-    ok_flat = (v.flat < p.flat_max)[v.inv]
-    ok_normal = (v.normal_z > p.normal_min)[v.inv]
+    ok_v, ok_flat, ok_normal = pre["ok_v"], pre["flat"] < p.flat_max, pre["normal"] > p.normal_min
     cand = ok_b & ok_s & ok_e & ok_v & ok_flat & ok_normal
 
     # 広がり: 水の区画が大きくつながっているか
-    ix = ((xyz[:, 0] - xyz[:, 0].min()) / p.cell).astype(np.int64)
-    iy = ((xyz[:, 1] - xyz[:, 1].min()) / p.cell).astype(np.int64)
-    nx, ny = ix.max() + 1, iy.max() + 1
+    ix, iy, nx, ny = pre["ix"], pre["iy"], pre["nx"], pre["ny"]
     cell = ix * ny + iy
     total = np.bincount(cell, minlength=nx * ny)
     hit = np.bincount(cell, weights=cand.astype(np.float64), minlength=nx * ny)
@@ -66,23 +71,24 @@ def _stages(xyz: np.ndarray, rgb: np.ndarray, p: WaterParams) -> dict:
     lab, nlab = label(grid, structure=np.ones((3, 3)))
     area = np.bincount(lab.ravel(), minlength=nlab + 1) * p.cell**2
     area[0] = 0
-    in_big = (area >= p.min_area)[lab[ix, iy]] if nlab else np.zeros(n, dtype=bool)
     comp = lab[ix, iy]
+    in_big = (area >= p.min_area)[comp] if nlab else np.zeros(n, dtype=bool)
 
     # 高さ: つながりごとに、水の候補の中央の高さに近い点だけを、水面にする
     water = np.zeros(n, dtype=bool)
-    z_ok = np.zeros(n, dtype=bool)
     for k in np.flatnonzero(area >= p.min_area):
         in_comp = comp == k
         c = in_comp & cand
         if not c.any():
             continue
         z0 = np.median(xyz[c, 2])
-        near = in_comp & (np.abs(xyz[:, 2] - z0) <= p.z_tol)
-        z_ok |= near
-        water |= near
+        water |= in_comp & (np.abs(xyz[:, 2] - z0) <= p.z_tol)
     return dict(bright=bright, sat=sat, exg=exg, ok_b=ok_b, ok_s=ok_s, ok_e=ok_e, ok_v=ok_v, ok_flat=ok_flat,
-                ok_normal=ok_normal, cand=cand, in_big=in_big, z_ok=z_ok, water=water)
+                ok_normal=ok_normal, cand=cand, in_big=in_big, z_ok=water, water=water)
+
+
+def _stages(xyz: np.ndarray, rgb: np.ndarray, p: WaterParams) -> dict:
+    return _decide(_prepare(xyz, rgb, p), xyz, p)
 
 
 def find_water(xyz: np.ndarray, rgb: np.ndarray, p: WaterParams | None = None) -> np.ndarray:
@@ -109,7 +115,8 @@ def diagnose(xyz: np.ndarray, rgb: np.ndarray, truth: np.ndarray, p: WaterParams
     order = [("明るさ", st["ok_b"]), ("鮮やかさ", st["ok_s"]), ("緑らしさ", st["ok_e"]), ("点数不足", st["ok_v"]),
              ("平らさ", st["ok_flat"]), ("水平", st["ok_normal"]), ("水の区画の外・小さい区画", st["in_big"]), ("水面の高さ", st["z_ok"])]
     alive = t.copy()
-    lines += ["", "取りこぼした点が、最初に外れた条件(合計は、取りこぼした点数):"]
+    lines += ["", "水の候補から外れた点が、最初に外れた条件(注: 水の区画の中で、あとから水面に戻された点も含むので、"
+              "合計は、最終的な取りこぼしより多くなる):"]
     for name, ok in order:
         fail = alive & ~ok
         if fail.any():
@@ -121,4 +128,40 @@ def diagnose(xyz: np.ndarray, rgb: np.ndarray, truth: np.ndarray, p: WaterParams
         for key, name, rng in (("bright", "明るさ", p.brightness), ("sat", "鮮やかさ", p.saturation), ("exg", "緑らしさ", p.exg)):
             lo, mid, hi = np.percentile(st[key][miss], [5, 50, 95])
             lines.append(f"  {name:<10} {lo:6.2f} / {mid:6.2f} / {hi:6.2f}    (範囲 {rng[0]:.2f}〜{rng[1]:.2f})")
+    return "\n".join(lines)
+
+
+# しきい値の試し方。色の範囲を段階的に広げ、平らさ・区画の条件も変える。(L0 が初期値)
+COLOR_LEVELS = {
+    "L0": dict(brightness=(0.50, 0.62), saturation=(0.10, 0.22), exg=(-0.02, 0.14)),
+    "L1": dict(brightness=(0.46, 0.64), saturation=(0.06, 0.25), exg=(-0.03, 0.18)),
+    "L2": dict(brightness=(0.42, 0.66), saturation=(0.04, 0.28), exg=(-0.04, 0.22)),
+    "L3": dict(brightness=(0.38, 0.70), saturation=(0.02, 0.32), exg=(-0.06, 0.26)),
+}
+
+
+def tune(xyz: np.ndarray, rgb: np.ndarray, truth: np.ndarray, base: WaterParams | None = None) -> str:
+    """しきい値の組み合わせを、まとめて試して、本当の水面(truth)との一致を表にする。"""
+    from dataclasses import replace
+
+    base = base or WaterParams()
+    pre = _prepare(xyz, rgb, base)
+    nt = int(truth.sum())
+    rows = []
+    for level, colors in COLOR_LEVELS.items():
+        for flat_max in (0.15, 0.30):
+            for min_fraction in (0.5, 0.35):
+                p = replace(base, flat_max=flat_max, min_fraction=min_fraction, **colors)
+                w = _decide(pre, xyz, p)["water"]
+                tp = int((w & truth).sum())
+                npred = int(w.sum())
+                rows.append((tp / max(npred + nt - tp, 1), level, flat_max, min_fraction, tp / nt, tp / max(npred, 1), npred))
+    rows.sort(reverse=True)
+    lines = [f"本当の水面: {nt:,}点。しきい値の組み合わせごとの一致(IoUが高い順):", "",
+             "  色の範囲  平らさ  区画の割合   再現率   適合率    IoU    水と判定した点数"]
+    for iou, level, fm, mf, rec, prec, npred in rows:
+        lines.append(f"  {level:<8} {fm:>6.2f} {mf:>9.2f}   {rec:>7.1%}  {prec:>7.1%}  {iou:.3f}  {npred:>14,}")
+    lines += ["", "色の範囲(L0〜L3)の中身:"]
+    for level, c in COLOR_LEVELS.items():
+        lines.append(f"  {level}: 明るさ {c['brightness']}  鮮やかさ {c['saturation']}  緑らしさ {c['exg']}")
     return "\n".join(lines)

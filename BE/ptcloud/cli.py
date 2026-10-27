@@ -5,7 +5,7 @@
   classify      ルールベースの簡易分類をして、分類つきのLASを保存する
   classify-dir  フォルダ内のLASを、まとめて簡易分類する
   ground        地面だけを抽出する(傾斜に対応)
-  water-check   水面の取りこぼしの原因を調べる
+  water-check   水面の取りこぼしの原因を調べる(water-tune はしきい値をまとめて試す)
   water         水面だけを抽出する(色・平らさ・広がり。water-dir はフォルダまとめて)
   stats         分類ごとの特徴の分布を見る(ルールのしきい値を決める手がかり)
   train         正解つきのLASで学習して、モデルを保存する
@@ -196,6 +196,14 @@ def cmd_water_check(args) -> int:
     return 0
 
 
+def cmd_water_tune(args) -> int:
+    from . import water
+
+    xyz, rgb, _, cls = lasio.read_points(args.file)
+    print(water.tune(xyz, rgb, cls == args.truth_class))
+    return 0
+
+
 def cmd_water_dir(args) -> int:
     return _run_dir(args, _water_file)
 
@@ -339,6 +347,11 @@ def main(argv=None) -> None:
     a.add_argument("file", help="水面の分類が入ったLAS")
     a.add_argument("--truth-class", type=int, default=9, help="水面の分類コード(既定 9)")
     a.set_defaults(func=cmd_water_check)
+
+    a = sub.add_parser("water-tune", help="水面のしきい値の組み合わせを、まとめて試して、表にする")
+    a.add_argument("file", help="水面の分類が入ったLAS")
+    a.add_argument("--truth-class", type=int, default=9, help="水面の分類コード(既定 9)")
+    a.set_defaults(func=cmd_water_tune)
 
     a = sub.add_parser("water-dir", help="フォルダ内のLASから、水面をまとめて抽出する")
     a.add_argument("src_dir")
