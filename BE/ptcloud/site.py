@@ -6,7 +6,7 @@
   3. 建物(6)        平らな面(壁・屋根)が大きくつながり、一番高いところが2.5m以上
   4. 車両(20)       地面から少し浮いた、緑でない、車の大きさのかたまり
   5. 植栽(低3・中4・高5) 緑らしい点、または高くて散らばった点。地面からの高さで、低・中・高に分ける
-  6. 路面(11)・地面(2) 地面の高さにある、緑でない点。灰色で平らなら路面、そうでなければ地面
+  6. 地面(2)        地面の高さにある、緑でない点。(split_road=True のときだけ、灰色で平らな点を路面(11)に分ける)
   7. その他(1)       どれにも当てはまらない点
 
 電線(14)・電柱(15)は、この現場にほとんどないと見て、まだ入れていない(必要なら、rules.py の判定を持ってくる)。
@@ -47,7 +47,9 @@ class SiteParams:
     vehicle_width: tuple = (1.3, 2.6)  # 幅(m)
     vehicle_height: tuple = (0.8, 2.4)  # 一番高いところ(m)
     vehicle_cell: float = 0.5  # かたまりを調べる区画の大きさ(m)
-    # 路面
+    # 地面と路面
+    split_road: bool = False  # True にすると、灰色で平らな地面を、路面(11)として分ける。既定は、分けず、すべて地面(2)
+    ground_with_water: bool = False  # True にすると、地面の平面を、水面の点も含めて探す。水際の岸が、水面の高さに引きずられ、岸が「地面より高い」と判定されやすいので、既定は、含めない
     road_sat_max: float = 0.12  # 路面とみなす、鮮やかさの上限(灰色)
     road_green_max: float = 0.02  # 路面とみなす、緑の強さの上限
     road_flat_max: float = 0.15  # 路面とみなす、平らさの上限
@@ -108,8 +110,12 @@ def classify_site(xyz: np.ndarray, rgb: np.ndarray, p: SiteParams | None = None)
         return out
     pts, col = xyz[land], rgb[land]
 
-    # 2. 地面と、地面からの高さ(水面の点を除いて、探す)
-    is_ground, height = find_ground(pts, p.ground)
+    # 2. 地面と、地面からの高さ
+    if p.ground_with_water:
+        g_all, h_all = find_ground(xyz, p.ground)
+        is_ground, height = g_all[land], h_all[land]
+    else:
+        is_ground, height = find_ground(pts, p.ground)
 
     # ボクセルの形・色
     v = _Voxels(pts.astype(np.float64), height, p.voxel, 3)
@@ -126,7 +132,8 @@ def classify_site(xyz: np.ndarray, rgb: np.ndarray, p: SiteParams | None = None)
     ground_like = is_ground & ~green
     road = ground_like & (sat_v[v.inv] <= p.road_sat_max) & (green_v[v.inv] <= p.road_green_max) & (v.flat[v.inv] <= p.road_flat_max)
     label_[ground_like] = GROUND
-    label_[road] = ROAD
+    if p.split_road:
+        label_[road] = ROAD
 
     # 5. 植栽: 緑らしい点、または高くて散らばった点
     scattered = (v.flat >= p.scatter_flat_min)[v.inv] & v.ok[v.inv]

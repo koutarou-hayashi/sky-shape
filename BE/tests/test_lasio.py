@@ -50,3 +50,14 @@ def test_write_classification(tmp_path):
     assert lasio.read_classification(dst).tolist() == [2, 2, 5, 6, 14, 15]
     with pytest.raises(ValueError):
         lasio.write_classification(src, dst, np.zeros(5, dtype=np.uint8))
+
+
+def test_crop_keeps_points_in_range_and_attributes(tmp_path):
+    src, dst = tmp_path / "a.las", tmp_path / "b.las"
+    make_las(src, [2, 14, 5, 14, 2, 15])  # x = 35000 + 0.5*i, y = -82000 + 0.25*i
+    kept = lasio.crop(src, dst, xmin=35000.4, xmax=35001.6, ymin=-82001.0, ymax=-81999.0, chunk=4)
+    out = laspy.read(dst)
+    assert kept == 3  # i = 1, 2, 3 (x = 35000.5, 35001.0, 35001.5)
+    assert np.asarray(out.classification).tolist() == [14, 5, 14]
+    assert out.red.tolist() == [100, 200, 300]  # RGBも引き継ぐ
+    assert laspy.read(src).header.point_count == 6  # 元のファイルは変わらない

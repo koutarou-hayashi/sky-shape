@@ -123,6 +123,21 @@ def remove_classes(src: str | Path, dst: str | Path, codes: list[int], chunk: in
     return {"kept": kept, "removed": dict(removed)}
 
 
+def crop(src: str | Path, dst: str | Path, xmin: float, xmax: float, ymin: float, ymax: float, chunk: int = CHUNK) -> int:
+    """水平の範囲(ファイルの座標 X, Y)に入る点だけを、別のファイルに保存する。残した点数を返す。
+
+    分類・座標系・RGBなどの属性は、そのまま引き継ぐ。小さな範囲を取り出して、画面で見たり、WingEarthで手動分類したりするのに使う。
+    """
+    kept = 0
+    with laspy.open(src) as r, laspy.open(dst, mode="w", header=r.header) as w:
+        for pts in r.chunk_iterator(chunk):
+            x, y = np.asarray(pts.x), np.asarray(pts.y)
+            inside = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
+            w.write_points(pts[inside])
+            kept += int(inside.sum())
+    return kept
+
+
 def write_classification(src: str | Path, dst: str | Path, classes: np.ndarray, chunk: int = CHUNK) -> None:
     """src の点はそのままに、分類コードだけを classes で置き換えて dst に保存する。
 

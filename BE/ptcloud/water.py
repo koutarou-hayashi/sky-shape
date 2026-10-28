@@ -160,19 +160,18 @@ def tune(xyz: np.ndarray, rgb: np.ndarray, truth: np.ndarray, base: WaterParams 
     pre = _prepare(xyz, rgb, base)
     nt = int(truth.sum())
     rows = []
-    for level, colors in COLOR_LEVELS.items():
-        for z_tol in (0.2, 0.3):
-            for min_fraction in (0.5, 0.35):
-                p = replace(base, z_tol=z_tol, min_fraction=min_fraction, **colors)
-                w = _decide(pre, xyz, p)["water"]
-                tp = int((w & truth).sum())
-                npred = int(w.sum())
-                rows.append((tp / max(npred + nt - tp, 1), level, z_tol, min_fraction, tp / nt, tp / max(npred, 1), npred))
+    for level in ("L0", "L1", "L2"):
+        for min_area in (100.0, 500.0, 2000.0, 5000.0):
+            p = replace(base, min_area=min_area, **COLOR_LEVELS[level])
+            w_ = _decide(pre, xyz, p)["water"]
+            tp = int((w_ & truth).sum())
+            npred = int(w_.sum())
+            rows.append((tp / max(npred + nt - tp, 1), level, min_area, tp / nt, tp / max(npred, 1), npred))
     rows.sort(reverse=True)
     lines = [f"本当の水面: {nt:,}点。しきい値の組み合わせごとの一致(IoUが高い順):", "",
-             "  色の範囲  高さの幅  区画の割合   再現率   適合率    IoU    水と判定した点数"]
-    for iou, level, zt, mf, rec, prec, npred in rows:
-        lines.append(f"  {level:<8} {zt:>7.2f} {mf:>9.2f}   {rec:>7.1%}  {prec:>7.1%}  {iou:.3f}  {npred:>14,}")
+             "  色の範囲  最小の面積(m²)   再現率   適合率    IoU    水と判定した点数"]
+    for iou, level, min_area, rec, prec, npred in rows:
+        lines.append(f"  {level:<8} {min_area:>12,.0f}   {rec:>7.1%}  {prec:>7.1%}  {iou:.3f}  {npred:>14,}")
     lines += ["", "色の範囲(L0〜L3)の中身:"]
     for level, c in COLOR_LEVELS.items():
         lines.append(f"  {level}: 明るさ {c['brightness']}  鮮やかさ {c['saturation']}  緑らしさ {c['exg']}")

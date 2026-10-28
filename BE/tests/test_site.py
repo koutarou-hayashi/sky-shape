@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("scipy")
 
-from ptcloud.site import BUILDING, GROUND, OTHER, ROAD, VEG_HIGH, VEG_LOW, VEG_MID, VEHICLE, WATER, classify_site  # noqa: E402
+from ptcloud.site import BUILDING, GROUND, OTHER, ROAD, VEG_HIGH, VEG_LOW, VEG_MID, VEHICLE, WATER, SiteParams, classify_site  # noqa: E402
 
 
 def scene(seed=0):
@@ -58,7 +58,7 @@ def scene(seed=0):
 
 def test_classes_are_mostly_found():
     xyz, rgb, truth = scene()
-    pred = classify_site(xyz, rgb)
+    pred = classify_site(xyz, rgb, SiteParams(split_road=True))  # 路面も分ける設定
     assert (pred == truth).mean() > 0.85
     for code, name, min_recall in ((WATER, "水面", 0.85), (VEG_HIGH, "高い植栽", 0.85), (BUILDING, "建物", 0.65),
                                    (VEHICLE, "車両", 0.7), (ROAD, "路面", 0.8), (VEG_LOW, "低い植栽", 0.8)):
@@ -78,3 +78,12 @@ def test_output_type():
     pred = classify_site(xyz, rgb)
     assert pred.shape == (len(xyz),) and pred.dtype == np.uint8
     assert set(np.unique(pred)) <= {OTHER, GROUND, VEG_LOW, VEG_MID, VEG_HIGH, BUILDING, WATER, ROAD, VEHICLE}
+
+
+def test_road_is_merged_into_ground_by_default():
+    # 既定では、路面と地面を分けない(舗装も、地面になる)。路面(11)は出てこない
+    xyz, rgb, truth = scene()
+    pred = classify_site(xyz, rgb)
+    assert (pred == ROAD).sum() == 0
+    assert (pred[truth == ROAD] == GROUND).mean() > 0.85
+    assert (pred[truth == GROUND] == GROUND).mean() > 0.95
