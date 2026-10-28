@@ -1,14 +1,15 @@
 """水面(池)の抽出。WingEarthが「水」とした点の特徴(色が一様、完全に水平、平ら、一定の高さ)を使う。
 
-手がかり(WingEarthの水面 約71万点の分布から決めた初期値。しきい値は WaterParams にまとめてある)
-- 色: 明るさ 0.54〜0.58、鮮やかさ 0.15〜0.18、緑らしさ 0.04〜0.09 と、とても狭い範囲に入る。
+手がかり(しきい値は WaterParams にまとめてある。色の範囲は、WingEarthの水面 約213万点との一致が一番よかった値 = tune の L1)
+- 色: 水面の中心は、明るさ 0.54〜0.58、鮮やかさ 0.15〜0.18、緑らしさ 0.04〜0.09。やや鮮やか・緑がかった水もあるので、範囲は少し広げてある。
       (植物は、色のばらつきが大きい)
 - 形: 面の向きが完全に水平(1.00)で、とても平ら。
 - 広がり: 池なので、条件を満たす区画が大きくつながる。
 - 高さ: 水面はどこも同じ高さ。つながりの中央の高さから大きくずれた点(水面の上の木の枝など)は、水面にしない。
 
 限界
-- 色の範囲は、水が多い3タイルの10〜90%点から決めた。反射や影で色が違う水面は、外れることがある。
+- 色の範囲を広げると、水でない所を水にする点が増える。広げた分は、確かな水の点(種)を含む区画で、水面の高さに近い点だけに限っている。
+- 区画の割合(min_fraction)を 0.35 に下げると、適合率が大きく下がる(約69%)。0.5 を保つ。
 - 水と同じ色で、平らな大きな面(灰色の舗装など)は、間違えることがある。
 - 浅い水の底が見える場所は、水面にならない。
 """
@@ -22,9 +23,9 @@ from .rules import _Voxels
 
 @dataclass
 class WaterParams:
-    brightness: tuple = (0.50, 0.62)  # 明るさ(0〜1)
-    saturation: tuple = (0.10, 0.22)  # 色の鮮やかさ(0〜1)
-    exg: tuple = (-0.02, 0.14)  # 緑らしさ
+    brightness: tuple = (0.46, 0.64)  # 明るさ(0〜1)
+    saturation: tuple = (0.06, 0.25)  # 色の鮮やかさ(0〜1)
+    exg: tuple = (-0.03, 0.18)  # 緑らしさ
     voxel: float = 1.0  # 平らさ・向きを調べるボクセルの大きさ(m)
     flat_max: float = 0.15  # 平らさ(小さいほど平ら)の上限
     normal_min: float = 0.97  # 面の向き(1なら水平)の下限
@@ -32,7 +33,13 @@ class WaterParams:
     min_fraction: float = 0.5  # 区画の中で、条件を満たす点の割合がこれ以上なら、水の区画
     close: int = 2  # 穴(船、反射、点の抜け)を埋める強さ(区画の数)
     min_area: float = 100.0  # 水面とみなす、つながりの最小の面積(m²)
-    z_tol: float = 0.3  # つながりの中央の高さから、この範囲の点だけを水面にする(m)
+    z_tol: float = 0.3  # 水面の高さ(種の点の中央値)から、この範囲の点だけを水面にする(m)
+    # 「種」: 色が水面の中心に近い、確かな水の点。広い色の範囲で広がった区画は、種を含むときだけ水面にして、
+    # 水面の高さも、種の点から決める。(水と似た色の、高さの違う路面などが、混ざるのを防ぐ)
+    seed_brightness: tuple = (0.50, 0.62)
+    seed_saturation: tuple = (0.10, 0.22)
+    seed_exg: tuple = (-0.02, 0.14)
+    min_seeds: int = 200  # 種の点が、これ以上ある区画だけを、水面にする
 
 
 def _prepare(xyz: np.ndarray, rgb: np.ndarray, p: WaterParams) -> dict:
@@ -59,6 +66,11 @@ def _decide(pre: dict, xyz: np.ndarray, p: WaterParams) -> dict:
     ok_e = (exg >= p.exg[0]) & (exg <= p.exg[1])
     ok_v, ok_flat, ok_normal = pre["ok_v"], pre["flat"] < p.flat_max, pre["normal"] > p.normal_min
     cand = ok_b & ok_s & ok_e & ok_v & ok_flat & ok_normal
+    seed = (  # 確かな水の点(色が、水面の中心に近い)
+        (bright >= p.seed_brightness[0]) & (bright <= p.seed_brightness[1])
+        & (sat >= p.seed_saturation[0]) & (sat <= p.seed_saturation[1])
+        & (exg >= p.seed_exg[0]) & (exg <= p.seed_exg[1]) & ok_v & ok_flat & ok_normal
+    )
 
     # 広がり: 水の区画が大きくつながっているか
     ix, iy, nx, ny = pre["ix"], pre["iy"], pre["nx"], pre["ny"]
@@ -74,12 +86,12 @@ def _decide(pre: dict, xyz: np.ndarray, p: WaterParams) -> dict:
     comp = lab[ix, iy]
     in_big = (area >= p.min_area)[comp] if nlab else np.zeros(n, dtype=bool)
 
-    # 高さ: つながりごとに、水の候補の中央の高さに近い点だけを、水面にする
+    # 高さ: つながりごとに、種の点の中央の高さに近い点だけを、水面にする(種が少ない区画は、水面にしない)
     water = np.zeros(n, dtype=bool)
     for k in np.flatnonzero(area >= p.min_area):
         in_comp = comp == k
-        c = in_comp & cand
-        if not c.any():
+        c = in_comp & seed
+        if c.sum() < p.min_seeds:
             continue
         z0 = np.median(xyz[c, 2])
         water |= in_comp & (np.abs(xyz[:, 2] - z0) <= p.z_tol)
@@ -149,19 +161,66 @@ def tune(xyz: np.ndarray, rgb: np.ndarray, truth: np.ndarray, base: WaterParams 
     nt = int(truth.sum())
     rows = []
     for level, colors in COLOR_LEVELS.items():
-        for flat_max in (0.15, 0.30):
+        for z_tol in (0.2, 0.3):
             for min_fraction in (0.5, 0.35):
-                p = replace(base, flat_max=flat_max, min_fraction=min_fraction, **colors)
+                p = replace(base, z_tol=z_tol, min_fraction=min_fraction, **colors)
                 w = _decide(pre, xyz, p)["water"]
                 tp = int((w & truth).sum())
                 npred = int(w.sum())
-                rows.append((tp / max(npred + nt - tp, 1), level, flat_max, min_fraction, tp / nt, tp / max(npred, 1), npred))
+                rows.append((tp / max(npred + nt - tp, 1), level, z_tol, min_fraction, tp / nt, tp / max(npred, 1), npred))
     rows.sort(reverse=True)
     lines = [f"本当の水面: {nt:,}点。しきい値の組み合わせごとの一致(IoUが高い順):", "",
-             "  色の範囲  平らさ  区画の割合   再現率   適合率    IoU    水と判定した点数"]
-    for iou, level, fm, mf, rec, prec, npred in rows:
-        lines.append(f"  {level:<8} {fm:>6.2f} {mf:>9.2f}   {rec:>7.1%}  {prec:>7.1%}  {iou:.3f}  {npred:>14,}")
+             "  色の範囲  高さの幅  区画の割合   再現率   適合率    IoU    水と判定した点数"]
+    for iou, level, zt, mf, rec, prec, npred in rows:
+        lines.append(f"  {level:<8} {zt:>7.2f} {mf:>9.2f}   {rec:>7.1%}  {prec:>7.1%}  {iou:.3f}  {npred:>14,}")
     lines += ["", "色の範囲(L0〜L3)の中身:"]
     for level, c in COLOR_LEVELS.items():
         lines.append(f"  {level}: 明るさ {c['brightness']}  鮮やかさ {c['saturation']}  緑らしさ {c['exg']}")
+    return "\n".join(lines)
+
+
+def describe_diff(xyz: np.ndarray, truth: np.ndarray, ours: np.ndarray, origin, cell: float = 1.0, top: int = 5) -> str:
+    """「こちらだけが水」「WingEarthだけが水」の点が、どこに、どのくらいの広さであるかを、文章にする。
+
+    - 相手の水面(WingEarth または こちら)からの距離: 水際のふちなら小さく、離れた場所の誤判定や見落としなら大きい。
+    - 水面の高さからの差: ほぼ0なら、同じ高さの面。
+    - 大きなかたまりの位置(ファイルの座標): 画面やWingEarthで、場所を探すのに使う。
+    """
+    from scipy.ndimage import distance_transform_edt
+
+    ix = ((xyz[:, 0] - xyz[:, 0].min()) / cell).astype(np.int64)
+    iy = ((xyz[:, 1] - xyz[:, 1].min()) / cell).astype(np.int64)
+    nx, ny = ix.max() + 1, iy.max() + 1
+
+    def grid(mask):
+        g = np.zeros((nx, ny), dtype=bool)
+        g[ix[mask], iy[mask]] = True
+        return g
+
+    both = truth & ours
+    level = float(np.median(xyz[both, 2])) if both.any() else float(np.median(xyz[truth, 2]))
+    lines = [f"水面の高さ(両方が水とした点の中央値): {level + origin[2]:.2f}m"]
+    for name, mask, ref, ref_name in (
+        ("こちらだけが水(30)", ours & ~truth, truth, "WingEarthの水"),
+        ("WingEarthだけが水(31)", truth & ~ours, ours, "こちらの水"),
+    ):
+        if not mask.any():
+            continue
+        dist = distance_transform_edt(~grid(ref)) * cell
+        d = dist[ix[mask], iy[mask]]
+        dz = xyz[mask, 2] - level
+        lines += ["", f"■ {name}: {int(mask.sum()):,}点",
+                  f"  {ref_name}からの距離(10% / 中央値 / 90%): " + " / ".join(f"{v:.1f}m" for v in np.percentile(d, [10, 50, 90])),
+                  f"  距離2m以内の点: {(d <= 2).mean():.0%}   5m以内: {(d <= 5).mean():.0%}   20m以上: {(d >= 20).mean():.0%}",
+                  f"  水面の高さとの差(10% / 中央値 / 90%): " + " / ".join(f"{v:+.2f}m" for v in np.percentile(dz, [10, 50, 90]))]
+        lab, k = label(grid(mask), structure=np.ones((3, 3)))
+        comp = lab[ix[mask], iy[mask]]
+        counts = np.bincount(comp, minlength=k + 1)
+        order = np.argsort(counts[1:])[::-1][:top] + 1
+        lines.append(f"  かたまり: {k:,}個。大きい順に、位置(ファイルの座標 X, Y)と点数:")
+        sel = np.flatnonzero(mask)
+        for c in order:
+            pts = xyz[sel[comp == c]]
+            cx, cy = np.median(pts[:, 0]) + origin[0], np.median(pts[:, 1]) + origin[1]
+            lines.append(f"    X={cx:.1f}, Y={cy:.1f}  {int(counts[c]):,}点  (高さ {np.median(pts[:, 2]) + origin[2]:.2f}m)")
     return "\n".join(lines)

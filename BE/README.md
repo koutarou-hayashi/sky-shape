@@ -30,6 +30,8 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 - `ground`: 地面だけを抽出して保存する(地面=2、それ以外=1)。**傾斜(法面)に対応**。WingEarthの地面(2)と見比べるのに使う。
 - `water` / `water-dir`: 水面だけを抽出して保存する(水面=9、それ以外=1)。色・平らさ・広がり・高さの一定さで判定する。
   WingEarthの水(9)と見比べるのは、`evaluate --truth 元のLAS --pred 出力 --ignore 2` でできる。
+- `water-check` / `water-tune` / `water-diff`: 水面の判定を、WingEarthの水と見比べて調整するための道具。
+  `water-check`は取りこぼしの原因、`water-tune`はしきい値の組み合わせの比較、`water-diff`は色分けLAS(9=両方、30=こちらだけ、31=取りこぼし)。
 - `stats`: 分類ごとの、高さ・色・平らさなどの分布を表示する(ルールのしきい値を決める手がかり)。
 - `train`: 正解の分類が入ったLAS(WingEarthなどで手動分類したもの)で学習して、モデル(.joblib)を保存する。
   `--valid` で検証用のLASを別に指定できる。指定しなければ、学習用を25mの帯に区切り、間をあけて約3割を検証にする。
@@ -38,6 +40,10 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 - `predict` / `predict-dir`: 学習したモデルで、LASを分類して保存する(フォルダまとめては predict-dir)。
   特徴量は、座標や標高そのものを使わず、地面からの高さ・色・まわりの点の並び方だけなので、別のタイルや別の現場にも当てはめられる。
   メモリのため、1ファイルは数十万点(今回のタイル)ほどにしておく。
+- `classify-site` / `classify-site-dir`: **池・森・駐車場・道路の現場向け**のルールで分類する(水面9、地面2、路面11、植栽 低3・中4・高5、建物6、車両20、その他1)。
+  水面 → 地面からの高さ → 建物 → 車両 → 植栽 → 路面・地面、の順に決める。しきい値は `ptcloud/site.py` の `SiteParams`。
+  **初期値は、水面以外はデータで確かめていない。画面で結果を見て調整する。** 電線・電柱はまだ入っていない。
+  メモリのため、元の2,274万点を一度にかけるより、タイル(`classify-site-dir`)を勧める。
 - `evaluate`: 正解のLASと予測のLASを、点ごとに比べる(同じ点を同じ順番で保存したファイル同士)。
   **手動で修正が必要な点数**、クラスごとの適合率・再現率・IoU、混同行列を出す。
 - `remove`: 指定したクラスの点を除いて、別のファイルに保存する。元のファイルは変えない。
@@ -47,6 +53,7 @@ python -m ptcloud remove data/in.las outputs/out.las --classes 14 15 --dry-run
 - `ptcloud/classes.py` 分類コードと名前の表(**仮の割り当て**。クラスを変えるときはここを直す)
 - `ptcloud/lasio.py` LASの読み書き(一定の点数ずつ処理する)
 - `ptcloud/ground.py` 地面の抽出(傾斜対応)。ルールベースへの組み込みは、これから
+- `ptcloud/site.py` 池・森・駐車場・道路向けの分類(水面→地面→建物→車両→植栽→路面)
 - `ptcloud/water.py` 水面の抽出(色・平らさ・広がり)
 - `ptcloud/stats.py` 分類ごとの特徴の分布
 - `ptcloud/rules.py` ルールベースの簡易分類(比較の基準値)

@@ -4,6 +4,7 @@
   evaluate  正解のLASと予測のLASを比べて、精度を出す
   classify      ルールベースの簡易分類をして、分類つきのLASを保存する
   classify-dir  フォルダ内のLASを、まとめて簡易分類する
+  classify-site 池・森・駐車場・道路向けのルールで分類する(classify-site-dir はフォルダまとめて)
   ground        地面だけを抽出する(傾斜に対応)
   water-check   水面の取りこぼしの原因を調べる(water-tune はしきい値をまとめて試す)
   water         水面だけを抽出する(色・平らさ・広がり。water-dir はフォルダまとめて)
@@ -204,6 +205,61 @@ def cmd_water_tune(args) -> int:
     return 0
 
 
+def cmd_water_diff(args) -> int:
+    """水面の判定を、WingEarthの水(正解)と見比べるためのLASを作る。画面で、取りこぼしや追加の場所を見る。"""
+    from . import water
+
+    src, dst = Path(args.src), Path(args.dst)
+    if src.resolve() == dst.resolve():
+        print("エラー: 元のファイルは上書きできません。別の名前を指定してください。", file=sys.stderr)
+        return 1
+    if dst.exists() and not args.force:
+        print(f"エラー: {dst} がすでにあります。上書きする場合は --force を付けてください。", file=sys.stderr)
+        return 1
+    xyz, rgb, _, cls = lasio.read_points(src)
+    truth, ours = cls == args.truth_class, water.find_water(xyz, rgb)
+    out = np.ones(len(cls), dtype=np.uint8)  # 1: どちらも水でない
+    out[truth & ours] = 9  # 9: 両方とも水
+    out[ours & ~truth] = 30  # 30: こちらだけが水(WingEarthにない)
+    out[truth & ~ours] = 31  # 31: WingEarthだけが水(こちらの取りこぼし)
+    lasio.write_classification(src, dst, out)
+    print()
+    for code, label in ((9, "両方とも水"), (30, "こちらだけが水"), (31, "WingEarthだけが水(取りこぼし)"), (1, "どちらも水でない")):
+        print(f"  {code:>3} {label:<24} {int((out == code).sum()):>12,}点")
+    print(f"保存しました: {dst}")
+    return 0
+
+
+def _site_file(src: Path, dst: Path) -> dict:
+    """1ファイルを、池・森・駐車場・道路向けのルールで分類して保存する。分類コードごとの点数を返す。"""
+    from . import site
+
+    xyz, rgb, _, _ = lasio.read_points(src)
+    classes = site.classify_site(xyz, rgb)
+    lasio.write_classification(src, dst, classes)
+    return {int(c): int(n) for c, n in zip(*np.unique(classes, return_counts=True))}
+
+
+def cmd_classify_site(args) -> int:
+    src, dst = Path(args.src), Path(args.dst)
+    if src.resolve() == dst.resolve():
+        print("エラー: 元のファイルは上書きできません。別の名前を指定してください。", file=sys.stderr)
+        return 1
+    if dst.exists() and not args.force:
+        print(f"エラー: {dst} がすでにあります。上書きする場合は --force を付けてください。", file=sys.stderr)
+        return 1
+    print("分類中...")
+    counts = _site_file(src, dst)
+    for code, n in sorted(counts.items()):
+        print(f"  {code:>3} {class_name(code):<10} {n:>12,}({n / sum(counts.values()):.1%})")
+    print(f"保存しました: {dst}")
+    return 0
+
+
+def cmd_classify_site_dir(args) -> int:
+    return _run_dir(args, _site_file)
+
+
 def cmd_water_dir(args) -> int:
     return _run_dir(args, _water_file)
 
@@ -352,6 +408,26 @@ def main(argv=None) -> None:
     a.add_argument("file", help="水面の分類が入ったLAS")
     a.add_argument("--truth-class", type=int, default=9, help="水面の分類コード(既定 9)")
     a.set_defaults(func=cmd_water_tune)
+
+    a = sub.add_parser("water-diff", help="水面の判定を、WingEarthの水と見比べる色分けLASを作る(9=両方、30=こちらだけ、31=取りこぼし)")
+    a.add_argument("src", help="水面の分類(WingEarthなど)が入った元のLAS")
+    a.add_argument("dst")
+    a.add_argument("--truth-class", type=int, default=9, help="水面の分類コード(既定 9)")
+    a.add_argument("--force", action="store_true")
+    a.set_defaults(func=cmd_water_diff)
+
+    a = sub.add_parser("classify-site", help="池・森・駐車場・道路向けのルールで分類して保存する(水面・地面・路面・植栽・建物・車両)")
+    a.add_argument("src", help="元のLAS(RGBつき。変更しない)")
+    a.add_argument("dst")
+    a.add_argument("--force", action="store_true")
+    a.set_defaults(func=cmd_classify_site)
+
+    a = sub.add_parser("classify-site-dir", help="フォルダ内のLASを、まとめて classify-site で分類する")
+    a.add_argument("src_dir")
+    a.add_argument("dst_dir")
+    a.add_argument("--pattern", default="*.las")
+    a.add_argument("--force", action="store_true")
+    a.set_defaults(func=cmd_classify_site_dir)
 
     a = sub.add_parser("water-dir", help="フォルダ内のLASから、水面をまとめて抽出する")
     a.add_argument("src_dir")

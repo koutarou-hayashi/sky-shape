@@ -54,3 +54,26 @@ def test_small_puddle_is_ignored():
     xyz = np.stack([r.uniform(0, 5, n), r.uniform(0, 5, n), 0.04 * r.normal(size=n)], 1).astype(np.float32)
     rgb = np.clip(np.array([.50, .57, .61]) + r.normal(0, 0.01, (n, 3)), 0, 1).astype(np.float32)
     assert find_water(xyz, rgb).mean() < 0.01
+
+
+def test_look_alike_road_at_a_different_height_is_not_water():
+    # 池のすぐ横に、水と似た色(広い色の範囲には入るが、確かな水の範囲の外)で、平らな路面が、水面より0.6m高い位置にある。
+    # 路面のほうが点が多くても、路面を水面にせず、池は水面のまま
+    xyz, rgb, kind = scene()
+    r = np.random.default_rng(3)
+    n = 120000
+    road = np.stack([r.uniform(0, 40, n), r.uniform(31, 61, n), 0.6 + 0.04 * r.normal(size=n)], 1).astype(np.float32)  # 池の北隣
+    road_rgb = np.clip(np.array([.47, .58, .61]) + r.normal(0, 0.005, (n, 3)), 0, 1).astype(np.float32)
+    w = find_water(np.concatenate([xyz, road]), np.concatenate([rgb, road_rgb]))
+    assert w[len(xyz):].mean() < 0.02  # 似た色の路面を、水にしない
+    assert w[:len(xyz)][kind == 1].mean() > 0.9  # 池は、変わらず水と判定される
+
+
+def test_pond_with_slightly_different_color_is_still_found():
+    # 水面の一部が、少し鮮やかな色(広い色の範囲には入るが、種の範囲の外)でも、同じ高さなら水面になる
+    xyz, rgb, kind = scene()
+    part = (kind == 1) & (xyz[:, 0] > 30)
+    rgb = rgb.copy()
+    rgb[part] = np.clip(np.array([.46, .56, .61]) + np.random.default_rng(1).normal(0, 0.01, (int(part.sum()), 3)), 0, 1)
+    w = find_water(xyz, rgb)
+    assert w[part].mean() > 0.8

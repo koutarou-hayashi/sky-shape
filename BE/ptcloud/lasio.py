@@ -44,6 +44,12 @@ def read_classification(path: str | Path, chunk: int = CHUNK) -> np.ndarray:
     return out
 
 
+def read_origin(path: str | Path) -> np.ndarray:
+    """ファイルの最小座標(read_xyz / read_points が引いている原点)を返す。相対座標を、ファイルの座標に戻すのに使う。"""
+    with laspy.open(path) as r:
+        return np.array(r.header.mins, dtype=np.float64)
+
+
 def read_xyz(path: str | Path, chunk: int = CHUNK) -> np.ndarray:
     """全点の座標(点数, 3)を、float32で返す。
 
