@@ -77,3 +77,29 @@ def test_pond_with_slightly_different_color_is_still_found():
     rgb[part] = np.clip(np.array([.46, .56, .61]) + np.random.default_rng(1).normal(0, 0.01, (int(part.sum()), 3)), 0, 1)
     w = find_water(xyz, rgb)
     assert w[part].mean() > 0.8
+
+
+def test_part_of_pond_with_dark_color_is_grown_into_water():
+    # 池の一部(x>30)が、日陰で暗く、「広い色の範囲」からも外れている。同じ高さで平らなら、つながった水面として広げる
+    xyz, rgb, kind = scene()
+    part = (kind == 1) & (xyz[:, 0] > 30)
+    rgb = rgb.copy()
+    rgb[part] = np.clip(np.array([.34, .43, .43]) + np.random.default_rng(2).normal(0, 0.008, (int(part.sum()), 3)), 0, 1)
+    assert find_water(xyz, rgb)[part].mean() > 0.8
+    from dataclasses import replace
+
+    from ptcloud.water import WaterParams
+
+    assert find_water(xyz, rgb, replace(WaterParams(), grow=False))[part].mean() < 0.2  # 広げなければ、拾えない
+
+
+def test_look_alike_flat_area_at_a_different_level_is_not_water():
+    # 池とは別の高さ(0.9m上)にある、水と同じ色の、平らな面(駐車場など)は、池と離れていても、水面にしない
+    xyz, rgb, kind = scene()
+    r = np.random.default_rng(4)
+    n = 60000
+    flat = np.stack([r.uniform(0, 30, n), r.uniform(40, 70, n), 0.9 + 0.05 * r.normal(size=n)], 1).astype(np.float32)  # 池は 0m。0.9m高い
+    flat_rgb = np.clip(np.array([.50, .57, .61]) + r.normal(0, 0.01, (n, 3)), 0, 1).astype(np.float32)
+    w = find_water(np.concatenate([xyz, flat]), np.concatenate([rgb, flat_rgb]))
+    assert w[len(xyz):].mean() < 0.02
+    assert w[:len(xyz)][kind == 1].mean() > 0.9

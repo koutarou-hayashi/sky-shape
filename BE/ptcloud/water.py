@@ -10,6 +10,8 @@
 限界
 - 色の範囲を広げると、水でない所を水にする点が増える。広げた分は、確かな水の点(種)を含む区画で、水面の高さに近い点だけに限っている。
 - 区画の割合(min_fraction)を 0.35 に下げると、適合率が大きく下がる(約69%)。0.5 を保つ。
+- 「一番大きな水面の高さ」を基準にするので、**ファイル全体(または池全体)に対して実行する**。池のないタイルだけを処理すると、
+  そのタイルの中の平らな面が、基準になってしまう。
 - 水と同じ色で、平らな大きな面(灰色の舗装など)は、間違えることがある。
 - 浅い水の底が見える場所は、水面にならない。
 """
@@ -40,6 +42,16 @@ class WaterParams:
     seed_saturation: tuple = (0.10, 0.22)
     seed_exg: tuple = (-0.02, 0.14)
     min_seeds: int = 200  # 種の点が、これ以上ある区画だけを、水面にする
+    # 池の高さ: 最大の水面の高さと、これ以上ちがう高さの水面は、(面積が big_area 以上でなければ)水面にしない。
+    # 水と似た色の、別の高さの平らな面(駐車場など)を、除くため。段々になった別の大きな池は、面積で残す。
+    level_tol: float = 0.5  # m
+    big_area: float = 5000.0  # m²
+    # 広げる: 水面の高さに近く、平らで水平なら、色が広い範囲(下の grow_*)に入る点まで、同じ池につながる区画を、水面に広げる。
+    # (日陰や反射で、色が水面の中心から外れた部分を、拾うため)
+    grow: bool = True
+    grow_brightness: tuple = (0.38, 0.70)
+    grow_saturation: tuple = (0.02, 0.32)
+    grow_exg: tuple = (-0.06, 0.26)
 
 
 def _prepare(xyz: np.ndarray, rgb: np.ndarray, p: WaterParams) -> dict:
@@ -86,15 +98,36 @@ def _decide(pre: dict, xyz: np.ndarray, p: WaterParams) -> dict:
     comp = lab[ix, iy]
     in_big = (area >= p.min_area)[comp] if nlab else np.zeros(n, dtype=bool)
 
-    # 高さ: つながりごとに、種の点の中央の高さに近い点だけを、水面にする(種が少ない区画は、水面にしない)
-    water = np.zeros(n, dtype=bool)
+    # 池ごとの水面の高さ = 種の点の中央値(種が少ない区画は、水面にしない)
+    found = []
     for k in np.flatnonzero(area >= p.min_area):
-        in_comp = comp == k
-        c = in_comp & seed
-        if c.sum() < p.min_seeds:
-            continue
-        z0 = np.median(xyz[c, 2])
-        water |= in_comp & (np.abs(xyz[:, 2] - z0) <= p.z_tol)
+        c = (comp == k) & seed
+        if c.sum() >= p.min_seeds:
+            found.append((int(k), float(np.median(xyz[c, 2])), float(area[k])))
+
+    water = np.zeros(n, dtype=bool)
+    if found:
+        main_z = max(found, key=lambda f: f[2])[1]  # 一番大きな水面の高さ
+        shape_ok = ok_v & ok_flat & ok_normal
+        wide_color = (
+            (bright >= p.grow_brightness[0]) & (bright <= p.grow_brightness[1])
+            & (sat >= p.grow_saturation[0]) & (sat <= p.grow_saturation[1])
+            & (exg >= p.grow_exg[0]) & (exg <= p.grow_exg[1])
+        )
+        for k, z0, a in found:
+            if abs(z0 - main_z) > p.level_tol and a < p.big_area:
+                continue  # 最大の水面と高さが違い、大きくもない面(駐車場など)は、水面にしない
+            near = np.abs(xyz[:, 2] - z0) <= p.z_tol
+            region = comp == k
+            if p.grow:
+                cells = lab == k
+                hit2 = np.bincount(cell, weights=(near & shape_ok & wide_color).astype(np.float64), minlength=nx * ny)
+                g2 = ((total > 0) & (hit2 >= p.min_fraction * np.maximum(total, 1))).reshape(nx, ny) | cells
+                g2 = binary_closing(np.pad(g2, pad), iterations=p.close)[pad:-pad, pad:-pad] | cells
+                lab2, _ = label(g2, structure=np.ones((3, 3)))
+                ids = np.unique(lab2[cells])
+                region = np.isin(lab2, ids[ids > 0])[ix, iy]  # 元の水面の区画に、つながっている区画だけ
+            water |= region & near
     return dict(bright=bright, sat=sat, exg=exg, ok_b=ok_b, ok_s=ok_s, ok_e=ok_e, ok_v=ok_v, ok_flat=ok_flat,
                 ok_normal=ok_normal, cand=cand, in_big=in_big, z_ok=water, water=water)
 
@@ -160,18 +193,19 @@ def tune(xyz: np.ndarray, rgb: np.ndarray, truth: np.ndarray, base: WaterParams 
     pre = _prepare(xyz, rgb, base)
     nt = int(truth.sum())
     rows = []
-    for level in ("L0", "L1", "L2"):
-        for min_area in (100.0, 500.0, 2000.0, 5000.0):
-            p = replace(base, min_area=min_area, **COLOR_LEVELS[level])
-            w_ = _decide(pre, xyz, p)["water"]
-            tp = int((w_ & truth).sum())
-            npred = int(w_.sum())
-            rows.append((tp / max(npred + nt - tp, 1), level, min_area, tp / nt, tp / max(npred, 1), npred))
+    for level in ("L0", "L1"):
+        for grow in (False, True):
+            for min_area in (100.0, 2000.0):
+                p = replace(base, grow=grow, min_area=min_area, **COLOR_LEVELS[level])
+                w_ = _decide(pre, xyz, p)["water"]
+                tp = int((w_ & truth).sum())
+                npred = int(w_.sum())
+                rows.append((tp / max(npred + nt - tp, 1), level, grow, min_area, tp / nt, tp / max(npred, 1), npred))
     rows.sort(reverse=True)
     lines = [f"本当の水面: {nt:,}点。しきい値の組み合わせごとの一致(IoUが高い順):", "",
-             "  色の範囲  最小の面積(m²)   再現率   適合率    IoU    水と判定した点数"]
-    for iou, level, min_area, rec, prec, npred in rows:
-        lines.append(f"  {level:<8} {min_area:>12,.0f}   {rec:>7.1%}  {prec:>7.1%}  {iou:.3f}  {npred:>14,}")
+             "  色の範囲  広げる  最小の面積(m²)   再現率   適合率    IoU    水と判定した点数"]
+    for iou, level, grow, min_area, rec, prec, npred in rows:
+        lines.append(f"  {level:<8} {'あり' if grow else 'なし':<6} {min_area:>12,.0f}   {rec:>7.1%}  {prec:>7.1%}  {iou:.3f}  {npred:>14,}")
     lines += ["", "色の範囲(L0〜L3)の中身:"]
     for level, c in COLOR_LEVELS.items():
         lines.append(f"  {level}: 明るさ {c['brightness']}  鮮やかさ {c['saturation']}  緑らしさ {c['exg']}")
