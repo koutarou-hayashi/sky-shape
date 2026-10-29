@@ -239,12 +239,40 @@ def cmd_water_diff(args) -> int:
     return 0
 
 
-def _site_file(src: Path, dst: Path) -> dict:
+def _site_params(args):
+    """classify-site のオプションから、SiteParams を作る。指定しなかった項目は、site.py の既定値のまま。"""
+    from . import site
+
+    kw = {}
+    for name in ("forest_cover_min", "forest_min_area", "forest_tall_min", "low_max", "mid_max"):
+        if getattr(args, name, None) is not None:
+            kw[name] = getattr(args, name)
+    if getattr(args, "no_forest", False):
+        kw["forest"] = False
+    if getattr(args, "no_grass_ground", False):
+        kw["grass_is_ground"] = False
+    if getattr(args, "split_road", False):
+        kw["split_road"] = True
+    return site.SiteParams(**kw)
+
+
+def _add_site_args(parser) -> None:
+    parser.add_argument("--forest-cover-min", type=float, help="林とみなす、樹冠が占める割合の下限(既定 0.6)")
+    parser.add_argument("--forest-min-area", type=float, help="林とみなす、つながりの最小の面積(m²、既定 2000)")
+    parser.add_argument("--forest-tall-min", type=float, help="背の高い植生とみなす高さの下限(m、既定 2.0)")
+    parser.add_argument("--low-max", type=float, help="植栽(低)の高さの上限(m、既定 0.5)")
+    parser.add_argument("--mid-max", type=float, help="植栽(中)の高さの上限(m、既定 2.0)")
+    parser.add_argument("--no-forest", action="store_true", help="林(24)を作らず、植栽(低・中・高)だけにする")
+    parser.add_argument("--no-grass-ground", action="store_true", help="地面の高さの草を、地面でなく、植栽(低)にする")
+    parser.add_argument("--split-road", action="store_true", help="灰色で平らな地面を、路面(11)に分ける")
+
+
+def _site_file(src: Path, dst: Path, params=None) -> dict:
     """1ファイルを、池・森・駐車場・道路向けのルールで分類して保存する。分類コードごとの点数を返す。"""
     from . import site
 
     xyz, rgb, _, _ = lasio.read_points(src)
-    classes = site.classify_site(xyz, rgb)
+    classes = site.classify_site(xyz, rgb, params)
     lasio.write_classification(src, dst, classes)
     return {int(c): int(n) for c, n in zip(*np.unique(classes, return_counts=True))}
 
@@ -258,7 +286,7 @@ def cmd_classify_site(args) -> int:
         print(f"エラー: {dst} がすでにあります。上書きする場合は --force を付けてください。", file=sys.stderr)
         return 1
     print("分類中...")
-    counts = _site_file(src, dst)
+    counts = _site_file(src, dst, _site_params(args))
     for code, n in sorted(counts.items()):
         print(f"  {code:>3} {class_name(code):<10} {n:>12,}({n / sum(counts.values()):.1%})")
     print(f"保存しました: {dst}")
@@ -266,7 +294,8 @@ def cmd_classify_site(args) -> int:
 
 
 def cmd_classify_site_dir(args) -> int:
-    return _run_dir(args, _site_file)
+    params = _site_params(args)
+    return _run_dir(args, lambda src, dst: _site_file(src, dst, params))
 
 
 def cmd_crop(args) -> int:
@@ -454,6 +483,7 @@ def main(argv=None) -> None:
     a.add_argument("src", help="元のLAS(RGBつき。変更しない)")
     a.add_argument("dst")
     a.add_argument("--force", action="store_true")
+    _add_site_args(a)
     a.set_defaults(func=cmd_classify_site)
 
     a = sub.add_parser("classify-site-dir", help="フォルダ内のLASを、まとめて classify-site で分類する")
@@ -461,6 +491,7 @@ def main(argv=None) -> None:
     a.add_argument("dst_dir")
     a.add_argument("--pattern", default="*.las")
     a.add_argument("--force", action="store_true")
+    _add_site_args(a)
     a.set_defaults(func=cmd_classify_site_dir)
 
     a = sub.add_parser("crop", help="水平の範囲(ファイルの座標 X, Y)の点だけを切り出して保存する")

@@ -5,7 +5,9 @@
   2. 地面からの高さ   ground.py: 傾斜に対応した地面の平面(水面の点は、地面を探すときに使わない)
   3. 建物(6)        平らな面(壁・屋根)が大きくつながり、一番高いところが2.5m以上
   4. 車両(20)       地面から少し浮いた、緑でない、車の大きさのかたまり
-  5. 植栽(低3・中4・高5) 緑らしい点、または高くて散らばった点。地面からの高さで、低・中・高に分ける
+  5. 林(24)・植栽(低3・中4・高5) 緑らしい点、または高くて散らばった点。背の高い植物が密集した広い範囲は、林(24)。
+                  それ以外(数本の木・草地など)は、地面からの高さで、低・中・高に分ける。
+                  地面の高さの緑の点(芝・草の斜面)は、林の外では、地面にする
   6. 地面(2)        地面の高さにある、緑でない点。(split_road=True のときだけ、灰色で平らな点を路面(11)に分ける)
   7. その他(1)       どれにも当てはまらない点
 
@@ -17,13 +19,13 @@
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.ndimage import label
+from scipy.ndimage import label, uniform_filter
 
 from .ground import GroundParams, find_ground
 from .rules import _large_components, _Voxels
 from .water import WaterParams, find_water
 
-OTHER, GROUND, VEG_LOW, VEG_MID, VEG_HIGH, BUILDING, WATER, ROAD, VEHICLE = 1, 2, 3, 4, 5, 6, 9, 11, 20
+OTHER, GROUND, VEG_LOW, VEG_MID, VEG_HIGH, BUILDING, WATER, ROAD, VEHICLE, FOREST = 1, 2, 3, 4, 5, 6, 9, 11, 20, 24
 
 
 @dataclass
@@ -37,6 +39,16 @@ class SiteParams:
     mid_max: float = 2.0  # これ未満なら中、以上なら高い植栽(m)
     dry_veg_min_height: float = 2.0  # 緑でなくても、この高さ以上で、散らばった点なら植物(枯れ葉・幹)(m)
     scatter_flat_min: float = 0.15  # 「散らばった」とみなす平らさ(大きいほど散らばる)
+    grass_is_ground: bool = True  # 地面の高さ(ground の point_tol 以内)の緑の点(芝・草の斜面)は、植栽(低)でなく、地面にする。林の中を除く
+    # 林(密集した植生)。背の高い植生が、窓の中で forest_cover_min 以上を覆い、広さが forest_min_area 以上なら、そこの植物を、林(24)にする。
+    # 数本の木(密集していない)は、林にならず、植栽(低・中・高)のまま
+    forest: bool = True
+    forest_cell: float = 1.0  # 林を調べる区画の大きさ(m)
+    forest_window: int = 11  # まわりを見る窓(区画の数)
+    forest_tall_min: float = 2.0  # 「背の高い植生」とみなす、地面からの高さの下限(m)
+    forest_cell_points: int = 3  # 区画に、背の高い植生の点が、これ以上あれば、樹冠のある区画
+    forest_cover_min: float = 0.6  # 窓の中で、樹冠のある区画が占める割合の下限
+    forest_min_area: float = 2000.0  # 林とみなす、つながりの最小の面積(m²)
     # 建物
     min_building_height: float = 2.5  # 平らな面のつながりの、一番高いところの高さの下限(m)
     min_building_voxels: int = 10  # 平らな面のつながりの、最小の大きさ
@@ -96,6 +108,27 @@ def _vehicles(xyz, height, cand, p: SiteParams) -> np.ndarray:
     return out
 
 
+def _forest_area(xyz: np.ndarray, height: np.ndarray, veg: np.ndarray, p: SiteParams) -> np.ndarray:
+    """各点が、「林(背の高い植生が密集した広い範囲)」の中にあるか(bool)を返す。"""
+    c = p.forest_cell
+    ix = ((xyz[:, 0] - xyz[:, 0].min()) / c).astype(np.int64)
+    iy = ((xyz[:, 1] - xyz[:, 1].min()) / c).astype(np.int64)
+    nx, ny = ix.max() + 1, iy.max() + 1
+    cell = ix * ny + iy
+    total = np.bincount(cell, minlength=nx * ny).reshape(nx, ny)
+    tall = np.bincount(cell, weights=(veg & (height >= p.forest_tall_min)).astype(np.float64), minlength=nx * ny).reshape(nx, ny)
+    canopy = (tall >= p.forest_cell_points).astype(np.float64)
+    has_data = (total > 0).astype(np.float64)  # 点がない所(池・範囲の外)は、「密集していない」ではなく、「データなし」として数えない
+    win = p.forest_window
+    cover = uniform_filter(canopy, win, mode="constant") / np.maximum(uniform_filter(has_data, win, mode="constant"), 1e-6)
+    lab, k = label((cover >= p.forest_cover_min) & (total > 0), structure=np.ones((3, 3)))
+    if k == 0:
+        return np.zeros(len(xyz), dtype=bool)
+    area = np.bincount(lab.ravel(), minlength=k + 1) * c * c
+    area[0] = 0
+    return (area >= p.forest_min_area)[lab][ix, iy]
+
+
 def classify_site(xyz: np.ndarray, rgb: np.ndarray, p: SiteParams | None = None) -> np.ndarray:
     """xyz: (点数,3)、rgb: (点数,3)の色(0〜1)。点ごとの分類コード(uint8)を返す。"""
     p = p or SiteParams()
@@ -138,8 +171,14 @@ def classify_site(xyz: np.ndarray, rgb: np.ndarray, p: SiteParams | None = None)
     # 5. 植栽: 緑らしい点、または高くて散らばった点
     scattered = (v.flat >= p.scatter_flat_min)[v.inv] & v.ok[v.inv]
     veg = green | (~is_ground & scattered & (height >= p.dry_veg_min_height))
+    in_forest = _forest_area(pts, height, veg, p) if p.forest else np.zeros(len(land), dtype=bool)
+    if p.grass_is_ground:  # 林の外の、地面の高さの緑の点(芝・草の斜面)は、地面
+        grass = is_ground & green & ~in_forest
+        label_[grass] = GROUND
+        veg = veg & ~grass
     veg_label = np.where(height < p.low_max, VEG_LOW, np.where(height < p.mid_max, VEG_MID, VEG_HIGH)).astype(np.uint8)
     label_[veg] = veg_label[veg]
+    label_[veg & in_forest] = FOREST  # 密集した広い範囲の植物は、高さを分けず、林にする
 
     # 3. 建物: 緑でない平らな面が大きくつながり、高いところがある
     plane_c = (
