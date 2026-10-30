@@ -348,6 +348,20 @@ def cmd_ground(args) -> int:
     return 0
 
 
+def cmd_classes(args) -> int:
+    from . import classes
+
+    if not (args.md or args.csv or args.ts):
+        print(classes.to_markdown())
+        return 0
+    for path, text in ((args.md, classes.to_markdown()), (args.csv, classes.to_csv()), (args.ts, classes.to_typescript())):
+        if path:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(text, encoding="utf-8-sig" if path == args.csv else "utf-8")
+            print(f"保存しました: {path}")
+    return 0
+
+
 def cmd_stats(args) -> int:
     from . import stats
 
@@ -521,6 +535,12 @@ def main(argv=None) -> None:
     for name, typ in (("cell", float), ("window", int), ("coarse", int), ("tol", float), ("point_tol", float)):
         a.add_argument(f"--{name.replace('_', '-')}", dest=name, type=typ, default=None, help="しきい値。既定値は ground.py の GroundParams を参照")
     a.set_defaults(func=cmd_ground)
+
+    a = sub.add_parser("classes", help="分類クラス(コード・名前・色・定義)の一覧を表示・書き出す")
+    a.add_argument("--md", help="定義書(Markdown)の保存先")
+    a.add_argument("--csv", help="一覧(CSV)の保存先")
+    a.add_argument("--ts", help="画面(フロント)用の表(TypeScript)の保存先。例: ../frontend/src/classTable.ts")
+    a.set_defaults(func=cmd_classes)
 
     a = sub.add_parser("stats", help="分類ごとの特徴(高さ・色・平らさなど)の分布を見る")
     a.add_argument("files", nargs="+", help="分類が入ったLAS(WingEarthの結果など)")

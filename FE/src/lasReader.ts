@@ -1,6 +1,7 @@
+import { CLASS_TABLE } from "./classTable";
 import type { ClassDef, PointCloudData } from "./types";
 
-// ASPRS標準の分類コード(LAS 1.4)
+// ASPRS標準の分類コード(LAS 1.4)。classTable.ts(プロジェクトの分類名・色)にないコードの名前に使う
 const CLASS_NAMES: Record<number, string> = {
   0: "未分類(分類なし)", 1: "未分類", 2: "地面", 3: "低い植生", 4: "中位の植生", 5: "高い植生",
   6: "建物", 7: "ノイズ(低)", 8: "予約", 9: "水", 10: "鉄道", 11: "道路面", 12: "予約",
@@ -104,8 +105,8 @@ export async function readLas(file: File, opts: ReadOptions = {}): Promise<Point
   }
   const classDefs: ClassDef[] = ids.map((id) => ({
     id,
-    name: CLASS_NAMES[id] ?? `クラス${id}`,
-    color: PALETTE[id % PALETTE.length],
+    name: CLASS_TABLE[id]?.name ?? CLASS_NAMES[id] ?? `クラス${id}`,
+    color: CLASS_TABLE[id]?.color ?? PALETTE[id % PALETTE.length],
   }));
 
   return {
